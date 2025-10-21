@@ -7,7 +7,7 @@ export class EventSheetService {
   // Convertir fila de Google Sheets a objeto EventSheet
   private rowToEventSheet(row: any[], rowIndex: number): EventSheet {
     return {
-      id: String(rowIndex + 1), // El ID es el número de fila
+      id: String(row[0] || ""), // ✅ Ahora el ID se toma desde la columna A (Id)
       fechaCliente: row[1] || "",
       horaCliente: row[2] || "",
       nombre: row[3] || "",
@@ -36,7 +36,7 @@ export class EventSheetService {
   // Convertir objeto EventSheet a fila de Google Sheets
   private eventSheetToRow(event: CreateEventSheetDTO | UpdateEventSheetDTO, id?: string): any[] {
     return [
-      id || "", // Id
+      id || "", // Id (columna A)
       event.fechaCliente || "",
       event.horaCliente || "",
       event.nombre || "",
