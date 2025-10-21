@@ -1,6 +1,21 @@
 import type { EventSheet, CreateEventSheetDTO, UpdateEventSheetDTO } from "../types/eventSheet.types"
 import { getGoogleSheetsClient, SPREADSHEET_ID, SHEET_NAME } from "../config/googleSheets.config"
 
+// 👇 Al inicio del archivo (debajo de imports), útil para encontrar columnas de Observacion
+const OBS_COLUMNS = [
+  { key: 'Observacion1', index: 23, letter: 'X'  }, // 0-based: A=0 … W=22 ⇒ X=23
+  { key: 'Observacion2', index: 24, letter: 'Y'  },
+  { key: 'Observacion3', index: 25, letter: 'Z'  },
+  { key: 'Observacion4', index: 26, letter: 'AA' },
+  { key: 'Observacion5', index: 27, letter: 'AB' },
+  { key: 'Observacion6', index: 28, letter: 'AC' },
+  { key: 'Observacion7', index: 29, letter: 'AD' },
+  { key: 'Observacion8', index: 30, letter: 'AE' },
+]
+
+
+
+
 export class EventSheetService {
   private sheets = getGoogleSheetsClient()
 
@@ -66,7 +81,7 @@ export class EventSheetService {
     try {
       const response = await this.sheets.spreadsheets.values.get({
         spreadsheetId: SPREADSHEET_ID,
-        range: `${SHEET_NAME}!A2:W`, // Desde la fila 2 (asumiendo que la 1 es el header)
+        range: `${SHEET_NAME}!A2:AE`, // Desde la fila 2 (asumiendo que la 1 es el header)
       })
 
       const rows = response.data.values || []
@@ -82,7 +97,7 @@ export class EventSheetService {
       const rowNumber = Number.parseInt(id) + 1 // +1 porque la fila 1 es el header
       const response = await this.sheets.spreadsheets.values.get({
         spreadsheetId: SPREADSHEET_ID,
-        range: `${SHEET_NAME}!A${rowNumber}:W${rowNumber}`,
+        range: `${SHEET_NAME}!A${rowNumber}:AE${rowNumber}`,
       })
 
       const rows = response.data.values || []
@@ -105,7 +120,7 @@ export class EventSheetService {
 
       await this.sheets.spreadsheets.values.append({
         spreadsheetId: SPREADSHEET_ID,
-        range: `${SHEET_NAME}!A:W`,
+        range: `${SHEET_NAME}!A:AE`,
         valueInputOption: "USER_ENTERED",
         requestBody: {
           values: [newRow],
@@ -157,7 +172,7 @@ export class EventSheetService {
 
       await this.sheets.spreadsheets.values.update({
         spreadsheetId: SPREADSHEET_ID,
-        range: `${SHEET_NAME}!A${rowNumber}:W${rowNumber}`,
+        range: `${SHEET_NAME}!A${rowNumber}:AE${rowNumber}`,
         valueInputOption: "USER_ENTERED",
         requestBody: {
           values: [updatedRow],
@@ -170,4 +185,70 @@ export class EventSheetService {
       throw new Error("Error al actualizar evento en Google Sheets")
     }
   }
+  
+
+  // Observaciones
+
+
+
+
+  // Devuelve las observaciones de un cliente (Id) ordenadas: más reciente arriba
+async getObservacionesById(id: string): Promise<string[]> {
+  // Buscamos la fila por número, como ya haces en getEventById
+  const rowNumber = Number.parseInt(id) + 1 // +1 por header
+  const response = await this.sheets.spreadsheets.values.get({
+    spreadsheetId: SPREADSHEET_ID,
+    range: `${SHEET_NAME}!A${rowNumber}:AE${rowNumber}`,
+  })
+  const row = (response.data.values?.[0] ?? [])
+
+  // Tomamos Observacion1..8 (index 23..30). Suponemos que 1 es la más antigua y 8 la más reciente.
+  const obs = OBS_COLUMNS.map(c => (row[c.index] ?? '').toString().trim())
+    .filter(Boolean)
+
+  // Orden descendente por "reciente": Observacion8 → Observacion1
+  const ordered = OBS_COLUMNS
+    .slice() // copia
+    .reverse()
+    .map(c => (row[c.index] ?? '').toString().trim())
+    .filter(Boolean)
+
+  return ordered
 }
+
+
+
+// Escribe la nueva observación en la primera columna ObservacionN vacía (1..8)
+// Devuelve la clave de columna usada (p.ej. 'Observacion3') o lanza error si está lleno.
+async addObservacion(id: string, texto: string): Promise<{ usedKey: string }> {
+  const rowNumber = Number.parseInt(id) + 1 // +1 por header
+  const getResp = await this.sheets.spreadsheets.values.get({
+    spreadsheetId: SPREADSHEET_ID,
+    range: `${SHEET_NAME}!A${rowNumber}:AE${rowNumber}`,
+  })
+  const row = (getResp.data.values?.[0] ?? [])
+
+  // Encontrar la PRIMERA vacía (número más chico) entre Observacion1..8
+  const emptyCol = OBS_COLUMNS.find(c => !row[c.index] || `${row[c.index]}`.trim() === '')
+  if (!emptyCol) {
+    throw new Error('No hay columnas Observacion disponibles (1..8 ya completas).')
+  }
+
+  // Actualizar solo esa celda
+  const targetRange = `${SHEET_NAME}!${emptyCol.letter}${rowNumber}`
+  await this.sheets.spreadsheets.values.update({
+    spreadsheetId: SPREADSHEET_ID,
+    range: targetRange,
+    valueInputOption: "USER_ENTERED",
+    requestBody: { values: [[texto]] },
+  })
+
+  return { usedKey: emptyCol.key }
+}
+
+
+}
+
+
+
+

@@ -87,4 +87,57 @@ export class EventSheetController {
       })
     }
   }
+
+  // ✅ NUEVO: Obtener todas las observaciones del cliente (ordenadas más reciente arriba)
+  async getObservacionesById(req: Request, res: Response) {
+    try {
+      const { id } = req.params
+      if (!id) {
+        return res.status(400).json({
+          success: false,
+          message: "Falta el parámetro ID",
+        })
+      }
+
+      const observaciones = await eventSheetService.getObservacionesById(id)
+      res.json({
+        success: true,
+        data: observaciones,
+        count: observaciones.length,
+      })
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: error instanceof Error ? error.message : "Error al obtener observaciones",
+      })
+    }
+  }
+
+  // ✅ NUEVO: Agregar una nueva observación a la primera columna vacía
+  async addObservacion(req: Request, res: Response) {
+    try {
+      const { id } = req.params
+      const { texto } = req.body as { texto?: string }
+
+      if (!id || !texto || !texto.trim()) {
+        return res.status(400).json({
+          success: false,
+          message: "Faltan datos: id o texto",
+        })
+      }
+
+      const result = await eventSheetService.addObservacion(id, texto.trim())
+
+      res.status(201).json({
+        success: true,
+        data: result,
+        message: `Observación añadida correctamente (${result.usedKey})`,
+      })
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: error instanceof Error ? error.message : "Error al agregar observación",
+      })
+    }
+  }
 }
