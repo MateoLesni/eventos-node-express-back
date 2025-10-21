@@ -4,6 +4,7 @@ import { EventSheetService } from "../services/eventSheet.service"
 const eventSheetService = new EventSheetService()
 
 export class EventSheetController {
+  // 🔹 Obtener todos los eventos (incluye observacionesList)
   async getAllEvents(req: Request, res: Response) {
     try {
       const events = await eventSheetService.getAllEvents()
@@ -13,6 +14,7 @@ export class EventSheetController {
         count: events.length,
       })
     } catch (error) {
+      console.error("[Controller] Error en getAllEvents:", error)
       res.status(500).json({
         success: false,
         message: error instanceof Error ? error.message : "Error al obtener eventos",
@@ -20,6 +22,7 @@ export class EventSheetController {
     }
   }
 
+  // 🔹 Obtener evento por ID (incluye observacionesList)
   async getEventById(req: Request, res: Response) {
     try {
       const { id } = req.params
@@ -37,6 +40,7 @@ export class EventSheetController {
         data: event,
       })
     } catch (error) {
+      console.error("[Controller] Error en getEventById:", error)
       res.status(500).json({
         success: false,
         message: error instanceof Error ? error.message : "Error al obtener evento",
@@ -44,6 +48,7 @@ export class EventSheetController {
     }
   }
 
+  // 🔹 Crear nuevo evento
   async createEvent(req: Request, res: Response) {
     try {
       const eventData = req.body
@@ -55,6 +60,7 @@ export class EventSheetController {
         message: "Evento creado exitosamente",
       })
     } catch (error) {
+      console.error("[Controller] Error en createEvent:", error)
       res.status(500).json({
         success: false,
         message: error instanceof Error ? error.message : "Error al crear evento",
@@ -62,6 +68,7 @@ export class EventSheetController {
     }
   }
 
+  // 🔹 Actualizar evento existente
   async updateEvent(req: Request, res: Response) {
     try {
       const { id } = req.params
@@ -81,6 +88,7 @@ export class EventSheetController {
         message: "Evento actualizado exitosamente",
       })
     } catch (error) {
+      console.error("[Controller] Error en updateEvent:", error)
       res.status(500).json({
         success: false,
         message: error instanceof Error ? error.message : "Error al actualizar evento",
@@ -88,7 +96,7 @@ export class EventSheetController {
     }
   }
 
-  // ✅ NUEVO: Obtener todas las observaciones del cliente (ordenadas más reciente arriba)
+  // 🔹 Obtener observaciones de un cliente (ordenadas, más reciente arriba)
   async getObservacionesById(req: Request, res: Response) {
     try {
       const { id } = req.params
@@ -106,6 +114,7 @@ export class EventSheetController {
         count: observaciones.length,
       })
     } catch (error) {
+      console.error("[Controller] Error en getObservacionesById:", error)
       res.status(500).json({
         success: false,
         message: error instanceof Error ? error.message : "Error al obtener observaciones",
@@ -113,7 +122,7 @@ export class EventSheetController {
     }
   }
 
-  // ✅ NUEVO: Agregar una nueva observación a la primera columna vacía
+  // 🔹 Agregar una nueva observación (primera columna vacía)
   async addObservacion(req: Request, res: Response) {
     try {
       const { id } = req.params
@@ -134,6 +143,7 @@ export class EventSheetController {
         message: `Observación añadida correctamente (${result.usedKey})`,
       })
     } catch (error) {
+      console.error("[Controller] Error en addObservacion:", error)
       res.status(500).json({
         success: false,
         message: error instanceof Error ? error.message : "Error al agregar observación",
