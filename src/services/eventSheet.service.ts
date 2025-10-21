@@ -1,7 +1,7 @@
 import type { EventSheet, CreateEventSheetDTO, UpdateEventSheetDTO } from "../types/eventSheet.types"
 import { getGoogleSheetsClient, SPREADSHEET_ID, SHEET_NAME } from "../config/googleSheets.config"
 
-// Columnas de Observación (A=0 … W=22 ⇒ X=23 … AE=30)
+// Observaciones (A=0 … W=22 ⇒ X=23 … AE=30)
 const OBS_COLUMNS = [
   { key: "Observacion1", index: 23, letter: "X" },
   { key: "Observacion2", index: 24, letter: "Y" },
@@ -13,64 +13,94 @@ const OBS_COLUMNS = [
   { key: "Observacion8", index: 30, letter: "AE" },
 ]
 
+// Fechas de observaciones (AF=31 … AM=38) en el mismo orden 1..8
+const FECHA_COLUMNS = [
+  { key: "FechaObs1", index: 31, letter: "AF" },
+  { key: "FechaObs2", index: 32, letter: "AG" },
+  { key: "FechaObs3", index: 33, letter: "AH" },
+  { key: "FechaObs4", index: 34, letter: "AI" },
+  { key: "FechaObs5", index: 35, letter: "AJ" },
+  { key: "FechaObs6", index: 36, letter: "AK" },
+  { key: "FechaObs7", index: 37, letter: "AL" },
+  { key: "FechaObs8", index: 38, letter: "AM" },
+]
+
+type ObsItem = { texto: string; fecha: string }
+
 export class EventSheetService {
   private sheets = getGoogleSheetsClient()
 
   // Buscar número de fila (1-based) por Id en la columna A
   private async findRowNumberById(rawId: string): Promise<number | null> {
-    const id = (rawId || "").replace(/^:/, "") // por si viene con ":" al inicio
+    const id = (rawId || "").replace(/^:/, "")
     const resp = await this.sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: `${SHEET_NAME}!A2:A`, // solo IDs desde la fila 2
+      range: `${SHEET_NAME}!A2:A`,
     })
     const ids = resp.data.values?.map((r) => r[0]?.toString() ?? "") ?? []
     const idx = ids.findIndex((v) => v === id)
     if (idx === -1) return null
-    return idx + 2 // A2 es fila 2 ⇒ sumamos 2
+    return idx + 2 // A2 es fila 2
   }
 
-  // Convertir fila de Google Sheets a objeto EventSheet (+ observacionesList)
-  // 👇 devolvemos EventSheet + observacionesList
-private rowToEventSheet(
-  row: any[],
-  _rowIndex: number
-): EventSheet & { observacionesList: string[] } {
-  const base: EventSheet = {
-    id: String(row[0] || ""), // Col A (Id)
-    fechaCliente: row[1] || "",
-    horaCliente: row[2] || "",
-    nombre: row[3] || "",
-    telefono: row[4] || "",
-    mail: row[5] || "",
-    lugar: row[6] || "",
-    cantidadPersonas: row[7] || "",
-    observacion: row[8] || "",
-    redireccion: row[9] || "",
-    canal: row[10] || "",
-    respuestaViaMail: row[11] || "",
-    asignacionComercialMail: row[12] || "",
-    horarioInicioEvento: row[13] || "",
-    horarioFinalizacionEvento: row[14] || "",
-    fechaEvento: row[15] || "",
-    sector: row[16] || "",
-    vendedorComercialAsignado: row[17] || "",
-    marcaTemporal: row[18] || "",
-    demora: row[19] || "",
-    presupuesto: row[20] || "",
-    fechaPresupEnviado: row[21] || "",
-    estado: row[22] || "",
+  // Formato de fecha estático para guardar en Sheets
+  private nowAR(): string {
+    try {
+      // Fecha y hora local de Argentina
+      return new Intl.DateTimeFormat("es-AR", {
+        timeZone: "America/Argentina/Buenos_Aires",
+        dateStyle: "short",
+        timeStyle: "short",
+      }).format(new Date())
+    } catch {
+      // Fallback ISO
+      return new Date().toISOString()
+    }
   }
 
-  // Observacion1..8 (más reciente arriba)
-  const observacionesList = OBS_COLUMNS
-    .slice()
-    .reverse()
-    .map(c => (row[c.index] ?? "").toString().trim())
-    .filter(Boolean)
+  // Convertir fila de Google Sheets a objeto EventSheet (+ observacionesList con fecha)
+  private rowToEventSheet(
+    row: any[],
+    _rowIndex: number
+  ): EventSheet & { observacionesList: ObsItem[] } {
+    const base: EventSheet = {
+      id: String(row[0] || ""), // Col A (Id)
+      fechaCliente: row[1] || "",
+      horaCliente: row[2] || "",
+      nombre: row[3] || "",
+      telefono: row[4] || "",
+      mail: row[5] || "",
+      lugar: row[6] || "",
+      cantidadPersonas: row[7] || "",
+      observacion: row[8] || "",
+      redireccion: row[9] || "",
+      canal: row[10] || "",
+      respuestaViaMail: row[11] || "",
+      asignacionComercialMail: row[12] || "",
+      horarioInicioEvento: row[13] || "",
+      horarioFinalizacionEvento: row[14] || "",
+      fechaEvento: row[15] || "",
+      sector: row[16] || "",
+      vendedorComercialAsignado: row[17] || "",
+      marcaTemporal: row[18] || "",
+      demora: row[19] || "",
+      presupuesto: row[20] || "",
+      fechaPresupEnviado: row[21] || "",
+      estado: row[22] || "",
+    }
 
-  return { ...base, observacionesList }
-}
+    // Construir [{texto, fecha}] de Observacion1..8 + FechaObs1..8
+    // Suponemos que 1 es más antiguo y 8 el más reciente → mostramos 8..1
+    const observacionesList: ObsItem[] = OBS_COLUMNS.map((c, i) => {
+      const texto = (row[c.index] ?? "").toString().trim()
+      const fecha = (row[FECHA_COLUMNS[i].index] ?? "").toString().trim()
+      return { texto, fecha }
+    })
+      .filter((o) => o.texto) // solo con texto
+      .reverse() // más recientes arriba
 
+    return { ...base, observacionesList }
+  }
 
   // Convertir objeto EventSheet a fila de Google Sheets
   private eventSheetToRow(event: CreateEventSheetDTO | UpdateEventSheetDTO, id?: string): any[] {
@@ -98,17 +128,16 @@ private rowToEventSheet(
       event.presupuesto || "",
       event.fechaPresupEnviado || "",
       event.estado || "",
-      // NOTA: no escribimos Observacion1..8 desde acá; las maneja addObservacion
+      // Observacion1..8 y FechaObs1..8 se manejan en addObservacion()
     ]
   }
 
-  async getAllEvents(): Promise<(EventSheet & { observacionesList: string[] })[]> {
+  async getAllEvents(): Promise<(EventSheet & { observacionesList: ObsItem[] })[]> {
     try {
       const response = await this.sheets.spreadsheets.values.get({
         spreadsheetId: SPREADSHEET_ID,
-        range: `${SHEET_NAME}!A2:AE`, // incluye Observacion1..8
+        range: `${SHEET_NAME}!A2:AM`, // ahora incluye FechaObs1..8
       })
-
       const rows = response.data.values || []
       return rows.map((row, index) => this.rowToEventSheet(row, index))
     } catch (error) {
@@ -117,14 +146,14 @@ private rowToEventSheet(
     }
   }
 
-  async getEventById(id: string): Promise<(EventSheet & { observacionesList: string[] }) | null> {
+  async getEventById(id: string): Promise<(EventSheet & { observacionesList: ObsItem[] }) | null> {
     try {
       const rowNumber = await this.findRowNumberById(id)
       if (!rowNumber) return null
 
       const response = await this.sheets.spreadsheets.values.get({
         spreadsheetId: SPREADSHEET_ID,
-        range: `${SHEET_NAME}!A${rowNumber}:AE${rowNumber}`,
+        range: `${SHEET_NAME}!A${rowNumber}:AM${rowNumber}`,
       })
 
       const rows = response.data.values || []
@@ -139,19 +168,15 @@ private rowToEventSheet(
 
   async createEvent(eventData: CreateEventSheetDTO): Promise<EventSheet> {
     try {
-      // Primero obtenemos todas las filas para calcular el nuevo ID
       const allEvents = await this.getAllEvents()
       const newId = String(allEvents.length + 1)
-
       const newRow = this.eventSheetToRow(eventData, newId)
 
       await this.sheets.spreadsheets.values.append({
         spreadsheetId: SPREADSHEET_ID,
-        range: `${SHEET_NAME}!A:AE`,
+        range: `${SHEET_NAME}!A:AM`,
         valueInputOption: "USER_ENTERED",
-        requestBody: {
-          values: [newRow],
-        },
+        requestBody: { values: [newRow] },
       })
 
       return {
@@ -187,32 +212,26 @@ private rowToEventSheet(
 
   async updateEvent(id: string, eventData: UpdateEventSheetDTO): Promise<EventSheet | null> {
     try {
-      // Buscar fila por Id en col A
       const rowNumber = await this.findRowNumberById(id)
       if (!rowNumber) return null
 
-      // Obtener el actual (para merge)
       const currentResp = await this.sheets.spreadsheets.values.get({
         spreadsheetId: SPREADSHEET_ID,
-        range: `${SHEET_NAME}!A${rowNumber}:AE${rowNumber}`,
+        range: `${SHEET_NAME}!A${rowNumber}:AM${rowNumber}`,
       })
       const currentRow = currentResp.data.values?.[0] ?? []
       const currentEvent = this.rowToEventSheet(currentRow, rowNumber - 2)
 
-      // Mezclar con los nuevos datos
       const updatedEvent = { ...currentEvent, ...eventData }
       const updatedRow = this.eventSheetToRow(updatedEvent, id)
 
       await this.sheets.spreadsheets.values.update({
         spreadsheetId: SPREADSHEET_ID,
-        range: `${SHEET_NAME}!A${rowNumber}:AE${rowNumber}`,
+        range: `${SHEET_NAME}!A${rowNumber}:AM${rowNumber}`,
         valueInputOption: "USER_ENTERED",
-        requestBody: {
-          values: [updatedRow],
-        },
+        requestBody: { values: [updatedRow] },
       })
 
-      // Devolvemos sin observacionesList recalculada (opcional recalcular)
       return updatedEvent
     } catch (error) {
       console.error("[v0] Error updating event:", error)
@@ -222,47 +241,63 @@ private rowToEventSheet(
 
   // --------- Observaciones ---------
 
-  // Devolver observaciones (string[]) para un cliente por Id (más reciente arriba)
-  async getObservacionesById(id: string): Promise<string[]> {
+  // Devolver observaciones [{texto, fecha}] para un cliente por Id (más reciente arriba)
+  async getObservacionesById(id: string): Promise<ObsItem[]> {
     const rowNumber = await this.findRowNumberById(id)
     if (!rowNumber) return []
 
     const response = await this.sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: `${SHEET_NAME}!A${rowNumber}:AE${rowNumber}`,
+      range: `${SHEET_NAME}!A${rowNumber}:AM${rowNumber}`,
     })
     const row = response.data.values?.[0] ?? []
 
-    const ordered = OBS_COLUMNS.slice()
+    const list: ObsItem[] = OBS_COLUMNS.map((c, i) => {
+      const texto = (row[c.index] ?? "").toString().trim()
+      const fecha = (row[FECHA_COLUMNS[i].index] ?? "").toString().trim()
+      return { texto, fecha }
+    })
+      .filter((o) => o.texto)
       .reverse()
-      .map((c) => (row[c.index] ?? "").toString().trim())
-      .filter(Boolean)
 
-    return ordered
+    return list
   }
 
-  // Agregar observación en la primera columna ObservacionN vacía (1..8)
-  async addObservacion(id: string, texto: string): Promise<{ usedKey: string }> {
+  // Agregar observación: escribe en la primera ObservacionN vacía y su FechaObsN correspondiente
+  async addObservacion(id: string, texto: string): Promise<{ usedKey: string; usedDateKey: string }> {
     const rowNumber = await this.findRowNumberById(id)
     if (!rowNumber) throw new Error("Id no encontrado en la columna A")
 
     const getResp = await this.sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: `${SHEET_NAME}!A${rowNumber}:AE${rowNumber}`,
+      range: `${SHEET_NAME}!A${rowNumber}:AM${rowNumber}`,
     })
     const row = getResp.data.values?.[0] ?? []
 
-    const emptyCol = OBS_COLUMNS.find((c) => !row[c.index] || `${row[c.index]}`.trim() === "")
-    if (!emptyCol) throw new Error("No hay columnas Observacion disponibles (1..8 ya completas).")
+    const idx = OBS_COLUMNS.findIndex((c) => !row[c.index] || `${row[c.index]}`.trim() === "")
+    if (idx === -1) throw new Error("No hay columnas Observacion disponibles (1..8 ya completas).")
 
-    const targetRange = `${SHEET_NAME}!${emptyCol.letter}${rowNumber}`
+    const obsCol = OBS_COLUMNS[idx]
+    const fechaCol = FECHA_COLUMNS[idx]
+
+    const obsRange = `${SHEET_NAME}!${obsCol.letter}${rowNumber}`
+    const fechaRange = `${SHEET_NAME}!${fechaCol.letter}${rowNumber}`
+
+    // Escribir texto y fecha (estática) — dos updates simples
     await this.sheets.spreadsheets.values.update({
       spreadsheetId: SPREADSHEET_ID,
-      range: targetRange,
+      range: obsRange,
       valueInputOption: "USER_ENTERED",
       requestBody: { values: [[texto]] },
     })
 
-    return { usedKey: emptyCol.key }
+    await this.sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: fechaRange,
+      valueInputOption: "USER_ENTERED",
+      requestBody: { values: [[this.nowAR()]] },
+    })
+
+    return { usedKey: obsCol.key, usedDateKey: fechaCol.key }
   }
 }
