@@ -25,6 +25,22 @@ const FECHA_COLUMNS = [
   { key: "FechaObs8", index: 38, letter: "AM" },
 ]
 
+// Fecha/hora local Argentina: "dd/mm/aaaa hh:mm"
+function nowAR(): string {
+  try {
+    return new Intl.DateTimeFormat("es-AR", {
+      timeZone: "America/Argentina/Buenos_Aires",
+      dateStyle: "short",
+      timeStyle: "short",
+    }).format(new Date())
+  } catch {
+    // fallback
+    return new Date().toISOString()
+  }
+}
+
+
+
 type ObsItem = { texto: string; fecha: string }
 
 export class EventSheetService {
@@ -211,33 +227,58 @@ export class EventSheetService {
   }
 
   async updateEvent(id: string, eventData: UpdateEventSheetDTO): Promise<EventSheet | null> {
-    try {
-      const rowNumber = await this.findRowNumberById(id)
-      if (!rowNumber) return null
+  try {
+    // Buscar fila por Id en col A
+    const rowNumber = await this.findRowNumberById(id)
+    if (!rowNumber) return null
 
-      const currentResp = await this.sheets.spreadsheets.values.get({
-        spreadsheetId: SPREADSHEET_ID,
-        range: `${SHEET_NAME}!A${rowNumber}:AM${rowNumber}`,
-      })
-      const currentRow = currentResp.data.values?.[0] ?? []
-      const currentEvent = this.rowToEventSheet(currentRow, rowNumber - 2)
+    // Obtener el actual (para merge)
+    const currentResp = await this.sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${SHEET_NAME}!A${rowNumber}:AE${rowNumber}`,
+    })
+    const currentRow = currentResp.data.values?.[0] ?? []
+    const currentEvent = this.rowToEventSheet(currentRow, rowNumber - 2)
 
-      const updatedEvent = { ...currentEvent, ...eventData }
-      const updatedRow = this.eventSheetToRow(updatedEvent, id)
+    // Mezclar con los nuevos datos (aún sin timestamps)
+    const updatedEvent: EventSheet = { ...currentEvent, ...eventData }
 
-      await this.sheets.spreadsheets.values.update({
-        spreadsheetId: SPREADSHEET_ID,
-        range: `${SHEET_NAME}!A${rowNumber}:AM${rowNumber}`,
-        valueInputOption: "USER_ENTERED",
-        requestBody: { values: [updatedRow] },
-      })
+    // --- TIMESTAMPS AUTOMÁTICOS ---
+    // Si cargaron horarios y Marca temporal (col S) está vacía => setearla
+    const wroteAnyHorario =
+      Boolean((eventData as any).horarioInicioEvento) ||
+      Boolean((eventData as any).horarioFinalizacionEvento)
 
-      return updatedEvent
-    } catch (error) {
-      console.error("[v0] Error updating event:", error)
-      throw new Error("Error al actualizar evento en Google Sheets")
+    if (wroteAnyHorario && !currentEvent.marcaTemporal) {
+      updatedEvent.marcaTemporal = nowAR()
     }
+
+    // Si cargaron Presupuesto y Fecha Presup. enviado (col V) está vacía => setearla
+    if (typeof (eventData as any).presupuesto === "string" &&
+        (eventData as any).presupuesto.trim() &&
+        !currentEvent.fechaPresupEnviado) {
+      updatedEvent.fechaPresupEnviado = nowAR()
+    }
+    // --- FIN TIMESTAMPS ---
+
+    const updatedRow = this.eventSheetToRow(updatedEvent, id)
+
+    await this.sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${SHEET_NAME}!A${rowNumber}:AE${rowNumber}`,
+      valueInputOption: "USER_ENTERED",
+      requestBody: {
+        values: [updatedRow],
+      },
+    })
+
+    return updatedEvent
+  } catch (error) {
+    console.error("[v0] Error updating event:", error)
+    throw new Error("Error al actualizar evento en Google Sheets")
   }
+}
+
 
   // --------- Observaciones ---------
 
