@@ -25,21 +25,11 @@ const FECHA_COLUMNS = [
   { key: "FechaObs8", index: 38, letter: "AM" },
 ]
 
-// Fecha/hora local Argentina: "dd/mm/aaaa hh:mm"
-function nowAR(): string {
-  try {
-    return new Intl.DateTimeFormat("es-AR", {
-      timeZone: "America/Argentina/Buenos_Aires",
-      dateStyle: "short",
-      timeStyle: "short",
-    }).format(new Date())
-  } catch {
-    // fallback
-    return new Date().toISOString()
-  }
+// Columnas puntuales
+const COL = {
+  ESTADO: { letter: "W", index: 22 },          // columna W (0-based index 22)
+  RECHAZO_MOTIVO: { letter: "AO", index: 40 }, // columna AO (0-based index 40)
 }
-
-
 
 type ObsItem = { texto: string; fecha: string }
 
@@ -59,17 +49,15 @@ export class EventSheetService {
     return idx + 2 // A2 es fila 2
   }
 
-  // Formato de fecha estático para guardar en Sheets
+  // Fecha/hora local AR para guardar en Sheets
   private nowAR(): string {
     try {
-      // Fecha y hora local de Argentina
       return new Intl.DateTimeFormat("es-AR", {
         timeZone: "America/Argentina/Buenos_Aires",
         dateStyle: "short",
         timeStyle: "short",
       }).format(new Date())
     } catch {
-      // Fallback ISO
       return new Date().toISOString()
     }
   }
@@ -105,20 +93,19 @@ export class EventSheetService {
       estado: row[22] || "",
     }
 
-    // Construir [{texto, fecha}] de Observacion1..8 + FechaObs1..8
-    // Suponemos que 1 es más antiguo y 8 el más reciente → mostramos 8..1
+    // Observacion1..8 + FechaObs1..8 → mostramos más recientes arriba
     const observacionesList: ObsItem[] = OBS_COLUMNS.map((c, i) => {
       const texto = (row[c.index] ?? "").toString().trim()
       const fecha = (row[FECHA_COLUMNS[i].index] ?? "").toString().trim()
       return { texto, fecha }
     })
-      .filter((o) => o.texto) // solo con texto
-      .reverse() // más recientes arriba
+      .filter((o) => o.texto)
+      .reverse()
 
     return { ...base, observacionesList }
   }
 
-  // Convertir objeto EventSheet a fila de Google Sheets
+  // Convertir objeto EventSheet a fila de Google Sheets (A..W)
   private eventSheetToRow(event: CreateEventSheetDTO | UpdateEventSheetDTO, id?: string): any[] {
     return [
       id || "", // Id (columna A)
@@ -144,7 +131,7 @@ export class EventSheetService {
       event.presupuesto || "",
       event.fechaPresupEnviado || "",
       event.estado || "",
-      // Observacion1..8 y FechaObs1..8 se manejan en addObservacion()
+      // Observacion1..8 y FechaObs1..8 se manejan por addObservacion()
     ]
   }
 
@@ -152,7 +139,7 @@ export class EventSheetService {
     try {
       const response = await this.sheets.spreadsheets.values.get({
         spreadsheetId: SPREADSHEET_ID,
-        range: `${SHEET_NAME}!A2:AM`, // ahora incluye FechaObs1..8
+        range: `${SHEET_NAME}!A2:AM`, // incluye FechaObs1..8
       })
       const rows = response.data.values || []
       return rows.map((row, index) => this.rowToEventSheet(row, index))
@@ -226,6 +213,7 @@ export class EventSheetService {
     }
   }
 
+  // --- UPDATE EVENT (A..W) + estado (W) + rechazoMotivo (AO) ---
   async updateEvent(
     id: string,
     eventData: UpdateEventSheetDTO & { rechazoMotivo?: string }
@@ -234,7 +222,7 @@ export class EventSheetService {
       const rowNumber = await this.findRowNumberById(id)
       if (!rowNumber) return null
 
-      // Leer fila actual (podés leer hasta AM para tener fechas de obs si querés)
+      // Leer fila actual (A..AM para tener fechas de observaciones)
       const currentResp = await this.sheets.spreadsheets.values.get({
         spreadsheetId: SPREADSHEET_ID,
         range: `${SHEET_NAME}!A${rowNumber}:AM${rowNumber}`,
@@ -242,49 +230,62 @@ export class EventSheetService {
       const currentRow = currentResp.data.values?.[0] ?? []
       const currentEvent = this.rowToEventSheet(currentRow, rowNumber - 2)
 
-      // Mezclar con los nuevos datos (sin tocar rechazoMotivo acá)
-      const { rechazoMotivo, ...rowData } = eventData as any
+      // Separamos el motivo de rechazo (AO)
+      const { rechazoMotivo, ...rowData } = (eventData ?? {}) as any
+
+      // Merge SOLO base (A..W)
       const updatedEvent: EventSheet = { ...currentEvent, ...rowData }
 
-      // --- TIMESTAMPS AUTOMÁTICOS ---
+      // TIMESTAMPS automáticos
       const wroteAnyHorario =
-        Boolean((eventData as any).horarioInicioEvento) ||
-        Boolean((eventData as any).horarioFinalizacionEvento)
+        Boolean(rowData.horarioInicioEvento) ||
+        Boolean(rowData.horarioFinalizacionEvento)
 
       if (wroteAnyHorario && !currentEvent.marcaTemporal) {
-        updatedEvent.marcaTemporal = nowAR() // usa tu helper superior
+        updatedEvent.marcaTemporal = this.nowAR()
       }
 
       if (
-        typeof (eventData as any).presupuesto === "string" &&
-        (eventData as any).presupuesto.trim() &&
+        typeof rowData.presupuesto === "string" &&
+        rowData.presupuesto.trim() &&
         !currentEvent.fechaPresupEnviado
       ) {
-        updatedEvent.fechaPresupEnviado = nowAR()
+        updatedEvent.fechaPresupEnviado = this.nowAR()
       }
-      // --- FIN TIMESTAMPS ---
 
-      // 1) Actualizar SOLO el bloque base A..W (coincide con eventSheetToRow)
-      const updatedRow = this.eventSheetToRow(updatedEvent, id)
-      await this.sheets.spreadsheets.values.update({
-        spreadsheetId: SPREADSHEET_ID,
-        range: `${SHEET_NAME}!A${rowNumber}:${COL.ESTADO.letter}${rowNumber}`, // A..W
-        valueInputOption: "USER_ENTERED",
-        requestBody: { values: [updatedRow] },
-      })
+      // ¿Cambió algo real en A..W?
+      const baseKeys: (keyof EventSheet)[] = [
+        "fechaCliente","horaCliente","nombre","telefono","mail","lugar",
+        "cantidadPersonas","observacion","redireccion","canal",
+        "respuestaViaMail","asignacionComercialMail","horarioInicioEvento",
+        "horarioFinalizacionEvento","fechaEvento","sector",
+        "vendedorComercialAsignado","marcaTemporal","demora","presupuesto",
+        "fechaPresupEnviado","estado"
+      ]
+      const changedBase = baseKeys.some(k => (updatedEvent as any)[k] !== (currentEvent as any)[k])
+
+      // 1) Si cambió algo del bloque base, actualizamos A..W
+      if (changedBase) {
+        const updatedRow = this.eventSheetToRow(updatedEvent, id) // A..W
+        await this.sheets.spreadsheets.values.update({
+          spreadsheetId: SPREADSHEET_ID,
+          range: `${SHEET_NAME}!A${rowNumber}:${COL.ESTADO.letter}${rowNumber}`, // A..W
+          valueInputOption: "USER_ENTERED",
+          requestBody: { values: [updatedRow] },
+        })
+      }
 
       // 2) Si vino 'estado', reforzamos W{fila} (opcional pero seguro)
-      if (typeof eventData.estado === "string" && eventData.estado.trim() !== "") {
+      if (typeof rowData.estado === "string" && rowData.estado.trim() !== "") {
         await this.sheets.spreadsheets.values.update({
           spreadsheetId: SPREADSHEET_ID,
           range: `${SHEET_NAME}!${COL.ESTADO.letter}${rowNumber}`, // W{fila}
           valueInputOption: "USER_ENTERED",
-          requestBody: { values: [[eventData.estado.trim()]] },
+          requestBody: { values: [[rowData.estado.trim()]] },
         })
-        updatedEvent.estado = eventData.estado.trim()
       }
 
-      // 3) Si vino 'rechazoMotivo', escribir AO{fila}
+      // 3) Si vino 'rechazoMotivo', escribimos AO{fila}
       if (typeof rechazoMotivo === "string" && rechazoMotivo.trim() !== "") {
         await this.sheets.spreadsheets.values.update({
           spreadsheetId: SPREADSHEET_ID,
@@ -296,13 +297,12 @@ export class EventSheetService {
       }
 
       return updatedEvent
-    } catch (error) {
-      console.error("[v0] Error updating event:", error)
+    } catch (error: any) {
+      const gErr = error?.response?.data || error?.message || error
+      console.error("[v0] Error updating event (details):", gErr)
       throw new Error("Error al actualizar evento en Google Sheets")
     }
   }
-
-
 
   // --------- Observaciones ---------
 
@@ -364,5 +364,5 @@ export class EventSheetService {
     })
 
     return { usedKey: obsCol.key, usedDateKey: fechaCol.key }
-  } 
+  }
 }
