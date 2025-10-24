@@ -226,16 +226,16 @@ export class EventSheetService {
     }
   }
 
-  async updateEvent(id: string, eventData: UpdateEventSheetDTO): Promise<EventSheet | null> {
-  try {
-    // Buscar fila por Id en col A
-    const rowNumber = await this.findRowNumberById(id)
-    if (!rowNumber) return null
+  async updateEvent(id: string, eventData: UpdateEventSheetDTO & { rechazoMotivo?: string }): Promise<EventSheet | null> {
+    try {
+      const rowNumber = await this.findRowNumberById(id)
+      if (!rowNumber) return null
+
 
     // Obtener el actual (para merge)
     const currentResp = await this.sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: `${SHEET_NAME}!A${rowNumber}:AE${rowNumber}`,
+      range: `${SHEET_NAME}!A${rowNumber}:AO${rowNumber}`,
     })
     const currentRow = currentResp.data.values?.[0] ?? []
     const currentEvent = this.rowToEventSheet(currentRow, rowNumber - 2)
@@ -265,12 +265,22 @@ export class EventSheetService {
 
     await this.sheets.spreadsheets.values.update({
       spreadsheetId: SPREADSHEET_ID,
-      range: `${SHEET_NAME}!A${rowNumber}:AE${rowNumber}`,
+      range: `${SHEET_NAME}!A${rowNumber}:AO${rowNumber}`,
       valueInputOption: "USER_ENTERED",
       requestBody: {
         values: [updatedRow],
       },
     })
+
+    if (eventData.rechazoMotivo && eventData.rechazoMotivo.trim()) {
+      const targetRange = `${SHEET_NAME}!${COL.RECHAZO_MOTIVO.letter}${rowNumber}`
+      await this.sheets.spreadsheets.values.update({
+        spreadsheetId: SPREADSHEET_ID,
+        range: targetRange,
+        valueInputOption: "USER_ENTERED",
+        requestBody: { values: [[eventData.rechazoMotivo.trim()]] },
+      })
+    }
 
     return updatedEvent
   } catch (error) {
