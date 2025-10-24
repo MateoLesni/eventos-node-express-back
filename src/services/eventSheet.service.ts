@@ -226,68 +226,82 @@ export class EventSheetService {
     }
   }
 
-  async updateEvent(id: string, eventData: UpdateEventSheetDTO & { rechazoMotivo?: string }): Promise<EventSheet | null> {
+  async updateEvent(
+    id: string,
+    eventData: UpdateEventSheetDTO & { rechazoMotivo?: string }
+  ): Promise<EventSheet | null> {
     try {
       const rowNumber = await this.findRowNumberById(id)
       if (!rowNumber) return null
 
+      // Leer fila actual (podés leer hasta AM para tener fechas de obs si querés)
+      const currentResp = await this.sheets.spreadsheets.values.get({
+        spreadsheetId: SPREADSHEET_ID,
+        range: `${SHEET_NAME}!A${rowNumber}:AM${rowNumber}`,
+      })
+      const currentRow = currentResp.data.values?.[0] ?? []
+      const currentEvent = this.rowToEventSheet(currentRow, rowNumber - 2)
 
-    // Obtener el actual (para merge)
-    const currentResp = await this.sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: `${SHEET_NAME}!A${rowNumber}:AO${rowNumber}`,
-    })
-    const currentRow = currentResp.data.values?.[0] ?? []
-    const currentEvent = this.rowToEventSheet(currentRow, rowNumber - 2)
+      // Mezclar con los nuevos datos (sin tocar rechazoMotivo acá)
+      const { rechazoMotivo, ...rowData } = eventData as any
+      const updatedEvent: EventSheet = { ...currentEvent, ...rowData }
 
-    // Mezclar con los nuevos datos (aún sin timestamps)
-    const updatedEvent: EventSheet = { ...currentEvent, ...eventData }
+      // --- TIMESTAMPS AUTOMÁTICOS ---
+      const wroteAnyHorario =
+        Boolean((eventData as any).horarioInicioEvento) ||
+        Boolean((eventData as any).horarioFinalizacionEvento)
 
-    // --- TIMESTAMPS AUTOMÁTICOS ---
-    // Si cargaron horarios y Marca temporal (col S) está vacía => setearla
-    const wroteAnyHorario =
-      Boolean((eventData as any).horarioInicioEvento) ||
-      Boolean((eventData as any).horarioFinalizacionEvento)
+      if (wroteAnyHorario && !currentEvent.marcaTemporal) {
+        updatedEvent.marcaTemporal = nowAR() // usa tu helper superior
+      }
 
-    if (wroteAnyHorario && !currentEvent.marcaTemporal) {
-      updatedEvent.marcaTemporal = nowAR()
-    }
-
-    // Si cargaron Presupuesto y Fecha Presup. enviado (col V) está vacía => setearla
-    if (typeof (eventData as any).presupuesto === "string" &&
+      if (
+        typeof (eventData as any).presupuesto === "string" &&
         (eventData as any).presupuesto.trim() &&
-        !currentEvent.fechaPresupEnviado) {
-      updatedEvent.fechaPresupEnviado = nowAR()
-    }
-    // --- FIN TIMESTAMPS ---
+        !currentEvent.fechaPresupEnviado
+      ) {
+        updatedEvent.fechaPresupEnviado = nowAR()
+      }
+      // --- FIN TIMESTAMPS ---
 
-    const updatedRow = this.eventSheetToRow(updatedEvent, id)
-
-    await this.sheets.spreadsheets.values.update({
-      spreadsheetId: SPREADSHEET_ID,
-      range: `${SHEET_NAME}!A${rowNumber}:AO${rowNumber}`,
-      valueInputOption: "USER_ENTERED",
-      requestBody: {
-        values: [updatedRow],
-      },
-    })
-
-    if (eventData.rechazoMotivo && eventData.rechazoMotivo.trim()) {
-      const targetRange = `${SHEET_NAME}!${COL.RECHAZO_MOTIVO.letter}${rowNumber}`
+      // 1) Actualizar SOLO el bloque base A..W (coincide con eventSheetToRow)
+      const updatedRow = this.eventSheetToRow(updatedEvent, id)
       await this.sheets.spreadsheets.values.update({
         spreadsheetId: SPREADSHEET_ID,
-        range: targetRange,
+        range: `${SHEET_NAME}!A${rowNumber}:${COL.ESTADO.letter}${rowNumber}`, // A..W
         valueInputOption: "USER_ENTERED",
-        requestBody: { values: [[eventData.rechazoMotivo.trim()]] },
+        requestBody: { values: [updatedRow] },
       })
-    }
 
-    return updatedEvent
-  } catch (error) {
-    console.error("[v0] Error updating event:", error)
-    throw new Error("Error al actualizar evento en Google Sheets")
+      // 2) Si vino 'estado', reforzamos W{fila} (opcional pero seguro)
+      if (typeof eventData.estado === "string" && eventData.estado.trim() !== "") {
+        await this.sheets.spreadsheets.values.update({
+          spreadsheetId: SPREADSHEET_ID,
+          range: `${SHEET_NAME}!${COL.ESTADO.letter}${rowNumber}`, // W{fila}
+          valueInputOption: "USER_ENTERED",
+          requestBody: { values: [[eventData.estado.trim()]] },
+        })
+        updatedEvent.estado = eventData.estado.trim()
+      }
+
+      // 3) Si vino 'rechazoMotivo', escribir AO{fila}
+      if (typeof rechazoMotivo === "string" && rechazoMotivo.trim() !== "") {
+        await this.sheets.spreadsheets.values.update({
+          spreadsheetId: SPREADSHEET_ID,
+          range: `${SHEET_NAME}!${COL.RECHAZO_MOTIVO.letter}${rowNumber}`, // AO{fila}
+          valueInputOption: "USER_ENTERED",
+          requestBody: { values: [[rechazoMotivo.trim()]] },
+        })
+        ;(updatedEvent as any).rechazoMotivo = rechazoMotivo.trim()
+      }
+
+      return updatedEvent
+    } catch (error) {
+      console.error("[v0] Error updating event:", error)
+      throw new Error("Error al actualizar evento en Google Sheets")
+    }
   }
-}
+
 
 
   // --------- Observaciones ---------
@@ -350,5 +364,5 @@ export class EventSheetService {
     })
 
     return { usedKey: obsCol.key, usedDateKey: fechaCol.key }
-  }
+  } 
 }
