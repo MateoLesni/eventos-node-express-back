@@ -169,52 +169,52 @@ export class EventSheetService {
     }
   }
 
-  // ====== CREATE ====== (NO escribir ID: A queda vacía)
-  async createEvent(eventData: CreateEventSheetDTO): Promise<EventSheet> {
-    try {
-      // Construimos la fila con A = "" para NO tocar la columna A
-      const newRow = this.eventSheetToRow(eventData, "")
+  // ====== CREATE ====== (NO escribir ID: A queda vacía y NO se corre nada)
+async createEvent(eventData: CreateEventSheetDTO): Promise<EventSheet> {
+  try {
+    // Fila completa A..W con A = "" (ID vacío)
+    const newRow = this.eventSheetToRow(eventData, "")
 
-      // Append empezando en B:AM para ignorar A (ID)
-      await this.sheets.spreadsheets.values.append({
-        spreadsheetId: SPREADSHEET_ID,
-        range: `${SHEET_NAME}!B:AM`,
-        valueInputOption: "USER_ENTERED",
-        insertDataOption: "INSERT_ROWS",
-        requestBody: { values: [newRow.slice(1)] }, // desde B
-      })
+    await this.sheets.spreadsheets.values.append({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${SHEET_NAME}!A:AM`,            // <-- volvemos a A:AM
+      valueInputOption: "USER_ENTERED",
+      insertDataOption: "INSERT_ROWS",
+      requestBody: { values: [newRow] },      // <-- enviamos TODA la fila, sin slice()
+    })
 
-      // Devolvemos sin ID (tu Apps Script lo llenará)
-      return {
-        id: "", // queda vacío aquí
-        fechaCliente: eventData.fechaCliente || "",
-        horaCliente: eventData.horaCliente || "",
-        nombre: eventData.nombre || "",
-        telefono: eventData.telefono || "",
-        mail: eventData.mail || "",
-        lugar: eventData.lugar || "",
-        cantidadPersonas: eventData.cantidadPersonas || "",
-        observacion: eventData.observacion || "",
-        redireccion: eventData.redireccion || "",
-        canal: eventData.canal || "",
-        respuestaViaMail: eventData.respuestaViaMail || "",
-        asignacionComercialMail: eventData.asignacionComercialMail || "",
-        horarioInicioEvento: eventData.horarioInicioEvento || "",
-        horarioFinalizacionEvento: eventData.horarioFinalizacionEvento || "",
-        fechaEvento: eventData.fechaEvento || "", // <-- impacta en P
-        sector: eventData.sector || "",
-        vendedorComercialAsignado: eventData.vendedorComercialAsignado || "",
-        marcaTemporal: eventData.marcaTemporal || "",
-        demora: eventData.demora || "",
-        presupuesto: eventData.presupuesto || "",
-        fechaPresupEnviado: eventData.fechaPresupEnviado || "",
-        estado: eventData.estado || "",
-      }
-    } catch (error) {
-      console.error("[v0] Error creating event:", error)
-      throw new Error("Error al crear evento en Google Sheets")
+    // Devolvemos sin ID (lo completa tu Apps Script)
+    return {
+      id: "",
+      fechaCliente: eventData.fechaCliente || "",
+      horaCliente: eventData.horaCliente || "",
+      nombre: eventData.nombre || "",
+      telefono: eventData.telefono || "",
+      mail: eventData.mail || "",
+      lugar: eventData.lugar || "",
+      cantidadPersonas: eventData.cantidadPersonas || "",
+      observacion: eventData.observacion || "",
+      redireccion: eventData.redireccion || "",
+      canal: eventData.canal || "",
+      respuestaViaMail: eventData.respuestaViaMail || "",
+      asignacionComercialMail: eventData.asignacionComercialMail || "",
+      horarioInicioEvento: eventData.horarioInicioEvento || "",
+      horarioFinalizacionEvento: eventData.horarioFinalizacionEvento || "",
+      fechaEvento: eventData.fechaEvento || "",   // <-- impacta en P
+      sector: eventData.sector || "",
+      vendedorComercialAsignado: eventData.vendedorComercialAsignado || "",
+      marcaTemporal: eventData.marcaTemporal || "",
+      demora: eventData.demora || "",
+      presupuesto: eventData.presupuesto || "",
+      fechaPresupEnviado: eventData.fechaPresupEnviado || "",
+      estado: eventData.estado || "",
     }
+  } catch (error) {
+    console.error("[v0] Error creating event:", error)
+    throw new Error("Error al crear evento en Google Sheets")
   }
+}
+
 
   // --- UPDATE EVENT (A..W) + estado (W) + rechazoMotivo (AO) ---
   async updateEvent(
