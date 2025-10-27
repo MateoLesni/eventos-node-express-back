@@ -1,5 +1,6 @@
 import type { EventSheet, CreateEventSheetDTO, UpdateEventSheetDTO } from "../types/eventSheet.types"
 import { getGoogleSheetsClient, SPREADSHEET_ID, SHEET_NAME } from "../config/googleSheets.config"
+import { google } from "googleapis"
 
 // Observaciones (A=0 … W=22 ⇒ X=23 … AE=30)
 const OBS_COLUMNS = [
@@ -25,31 +26,94 @@ const FECHA_COLUMNS = [
   { key: "FechaObs8", index: 38, letter: "AM" },
 ]
 
-// Columnas puntuales
+// Columnas puntuales en hoja principal
 const COL = {
-  ESTADO: { letter: "W", index: 22 },          // columna W (0-based index 22)
-  RECHAZO_MOTIVO: { letter: "AO", index: 40 }, // columna AO (0-based index 40)
+  ESTADO: { letter: "W", index: 22 },          // W
+  RECHAZO_MOTIVO: { letter: "AO", index: 40 }, // AO
+}
+
+// === Auditoría ===
+const AUDIT_SHEET_NAME = process.env.AUDIT_SHEET_NAME || "Auditoria"
+// A: Fecha, B: ID Cliente, C: Fila, D: Campo, E: Valor Anterior, F: Valor Nuevo, G: Usuario, H: Origen, I: Nota
+const AUDIT_RANGE = `${AUDIT_SHEET_NAME}!A:I`
+
+// Etiquetas legibles para los campos (aparecen en “Campo”)
+const LABELS: Record<string, string> = {
+  fechaCliente: "Fecha Cliente",
+  horaCliente: "Hora Cliente",
+  nombre: "Nombre",
+  telefono: "Telefono",
+  mail: "Mail",
+  lugar: "Lugar",
+  cantidadPersonas: "Cantidad de Personas",
+  observacion: "Observacion",
+  redireccion: "Redireccion",
+  canal: "Canal",
+  respuestaViaMail: "Respuesta Via Mail",
+  asignacionComercialMail: "Asignación Comercial Mail",
+  horarioInicioEvento: "Horario Inicio Evento",
+  horarioFinalizacionEvento: "Horario Finalización Evento",
+  fechaEvento: "Fecha Evento",
+  sector: "Sector",
+  vendedorComercialAsignado: "Vendedor Comercial Asignado",
+  marcaTemporal: "Marca Temporal",
+  demora: "Demora",
+  presupuesto: "Presupuesto",
+  fechaPresupEnviado: "Fecha Presup Enviado",
+  estado: "Estado",
+  rechazoMotivo: "Motivo Rechazo",
 }
 
 type ObsItem = { texto: string; fecha: string }
+type AuditEntry = {
+  id?: string
+  rowNumber?: number
+  campo: string
+  antes: string
+  despues: string
+  usuario?: string
+  origen?: string
+  nota?: string
+}
 
 export class EventSheetService {
   private sheets = getGoogleSheetsClient()
 
-  // Buscar número de fila (1-based) por Id en la columna A
-  private async findRowNumberById(rawId: string): Promise<number | null> {
-    const id = (rawId || "").replace(/^:/, "")
-    const resp = await this.sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: `${SHEET_NAME}!A2:A`,
-    })
-    const ids = resp.data.values?.map((r) => r[0]?.toString() ?? "") ?? []
-    const idx = ids.findIndex((v) => v === id)
-    if (idx === -1) return null
-    return idx + 2 // A2 es fila 2
-  }
+  // ---------- util ----------
+// 🔧 Reemplazá COMPLETO este método en EventSheetService
+    private async ensureAuditSheetExists(): Promise<void> {
+      // usar SIEMPRE el cliente ya autenticado: this.sheets
+      const meta = await this.sheets.spreadsheets.get({
+        spreadsheetId: SPREADSHEET_ID,
+        includeGridData: false,
+      })
 
-  // Fecha/hora local AR para guardar en Sheets
+      const has = meta.data.sheets?.some(s => s.properties?.title === AUDIT_SHEET_NAME)
+      if (has) return
+
+      // crear la hoja "Auditoria"
+      await this.sheets.spreadsheets.batchUpdate({
+        spreadsheetId: SPREADSHEET_ID,
+        requestBody: {
+          requests: [{ addSheet: { properties: { title: AUDIT_SHEET_NAME } } }],
+        },
+      })
+
+  // setear encabezados
+  await this.sheets.spreadsheets.values.update({
+    spreadsheetId: SPREADSHEET_ID,
+    range: `${AUDIT_SHEET_NAME}!A1:I1`,
+    valueInputOption: "USER_ENTERED",
+    requestBody: {
+      values: [[
+        "Fecha", "ID Cliente", "Fila", "Campo", "Valor Anterior",
+        "Valor Nuevo", "Usuario", "Origen", "Nota",
+      ]],
+    },
+  })
+}
+
+
   private nowAR(): string {
     try {
       return new Intl.DateTimeFormat("es-AR", {
@@ -62,13 +126,56 @@ export class EventSheetService {
     }
   }
 
-  // Convertir fila de Google Sheets a objeto EventSheet (+ observacionesList con fecha)
-  private rowToEventSheet(
-    row: any[],
-    _rowIndex: number
-  ): EventSheet & { observacionesList: ObsItem[] } {
+  private parseRowFromUpdatedRange(updatedRange?: string | null): number | undefined {
+    // Ej: "Base!A123:W123" → 123
+    if (!updatedRange) return
+    const m = /[A-Za-z]+(\d+):/.exec(updatedRange.split("!").pop() || "")
+    return m ? Number(m[1]) : undefined
+  }
+
+  private toLabel(key: string) {
+    return LABELS[key] || key
+  }
+
+  private async appendAudit(entries: AuditEntry[]) {
+    if (!entries.length) return
+    await this.ensureAuditSheetExists()
+    const values = entries.map(e => ([
+      this.nowAR(),
+      e.id || "",
+      e.rowNumber ? String(e.rowNumber) : "",
+      e.campo,
+      e.antes ?? "",
+      e.despues ?? "",
+      e.usuario || "",
+      e.origen || "BACK",
+      e.nota || "",
+    ]))
+    await this.sheets.spreadsheets.values.append({
+      spreadsheetId: SPREADSHEET_ID,
+      range: AUDIT_RANGE,
+      valueInputOption: "USER_ENTERED",
+      insertDataOption: "INSERT_ROWS",
+      requestBody: { values },
+    })
+  }
+
+  // ---------- hoja principal ----------
+  private async findRowNumberById(rawId: string): Promise<number | null> {
+    const id = (rawId || "").replace(/^:/, "")
+    const resp = await this.sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${SHEET_NAME}!A2:A`,
+    })
+    const ids = resp.data.values?.map((r) => r[0]?.toString() ?? "") ?? []
+    const idx = ids.findIndex((v) => v === id)
+    if (idx === -1) return null
+    return idx + 2
+  }
+
+  private rowToEventSheet(row: any[], _rowIndex: number): EventSheet & { observacionesList: ObsItem[] } {
     const base: EventSheet = {
-      id: String(row[0] || ""), // Col A (Id)
+      id: String(row[0] || ""),
       fechaCliente: row[1] || "",
       horaCliente: row[2] || "",
       nombre: row[3] || "",
@@ -83,7 +190,7 @@ export class EventSheetService {
       asignacionComercialMail: row[12] || "",
       horarioInicioEvento: row[13] || "",
       horarioFinalizacionEvento: row[14] || "",
-      fechaEvento: row[15] || "", // <-- Columna P
+      fechaEvento: row[15] || "",
       sector: row[16] || "",
       vendedorComercialAsignado: row[17] || "",
       marcaTemporal: row[18] || "",
@@ -93,7 +200,6 @@ export class EventSheetService {
       estado: row[22] || "",
     }
 
-    // Observacion1..8 + FechaObs1..8 → más recientes arriba
     const observacionesList: ObsItem[] = OBS_COLUMNS.map((c, i) => {
       const texto = (row[c.index] ?? "").toString().trim()
       const fecha = (row[FECHA_COLUMNS[i].index] ?? "").toString().trim()
@@ -105,10 +211,9 @@ export class EventSheetService {
     return { ...base, observacionesList }
   }
 
-  // Convertir objeto EventSheet a fila de Google Sheets (A..W)
   private eventSheetToRow(event: CreateEventSheetDTO | UpdateEventSheetDTO, id?: string): any[] {
     return [
-      id || "", // Id (columna A) — en creación se pasa "" para que quede vacía
+      id || "", // A
       event.fechaCliente || "",
       event.horaCliente || "",
       event.nombre || "",
@@ -123,7 +228,7 @@ export class EventSheetService {
       event.asignacionComercialMail || "",
       event.horarioInicioEvento || "",
       event.horarioFinalizacionEvento || "",
-      event.fechaEvento || "", // <-- P
+      event.fechaEvento || "", // P
       event.sector || "",
       event.vendedorComercialAsignado || "",
       event.marcaTemporal || "",
@@ -131,7 +236,6 @@ export class EventSheetService {
       event.presupuesto || "",
       event.fechaPresupEnviado || "",
       event.estado || "",
-      // Observacion1..8 y FechaObs1..8 se manejan por addObservacion()
     ]
   }
 
@@ -139,7 +243,7 @@ export class EventSheetService {
     try {
       const response = await this.sheets.spreadsheets.values.get({
         spreadsheetId: SPREADSHEET_ID,
-        range: `${SHEET_NAME}!A2:AM`, // incluye FechaObs1..8
+        range: `${SHEET_NAME}!A2:AM`,
       })
       const rows = response.data.values || []
       return rows.map((row, index) => this.rowToEventSheet(row, index))
@@ -169,63 +273,94 @@ export class EventSheetService {
     }
   }
 
-  // ====== CREATE ====== (NO escribir ID: A queda vacía y NO se corre nada)
-async createEvent(eventData: CreateEventSheetDTO): Promise<EventSheet> {
-  try {
-    // Fila completa A..W con A = "" (ID vacío)
-    const newRow = this.eventSheetToRow(eventData, "")
+  // ====== CREATE ====== (A queda vacía; audita cada campo seteado)
+  async createEvent(
+    eventData: CreateEventSheetDTO,
+    opts?: { usuario?: string; origen?: string } // opcional
+  ): Promise<EventSheet> {
+    try {
+      // construir fila con A = "" (ID vacío)
+      const newRow = this.eventSheetToRow(eventData, "")
+      const resp = await this.sheets.spreadsheets.values.append({
+        spreadsheetId: SPREADSHEET_ID,
+        range: `${SHEET_NAME}!A:AM`,
+        valueInputOption: "USER_ENTERED",
+        insertDataOption: "INSERT_ROWS",
+        requestBody: { values: [newRow] },
+      })
 
-    await this.sheets.spreadsheets.values.append({
-      spreadsheetId: SPREADSHEET_ID,
-      range: `${SHEET_NAME}!A:AM`,            // <-- volvemos a A:AM
-      valueInputOption: "USER_ENTERED",
-      insertDataOption: "INSERT_ROWS",
-      requestBody: { values: [newRow] },      // <-- enviamos TODA la fila, sin slice()
-    })
+      // obtener número de fila insertada
+      const rowNumber = this.parseRowFromUpdatedRange(resp.data.updates?.updatedRange)
 
-    // Devolvemos sin ID (lo completa tu Apps Script)
-    return {
-      id: "",
-      fechaCliente: eventData.fechaCliente || "",
-      horaCliente: eventData.horaCliente || "",
-      nombre: eventData.nombre || "",
-      telefono: eventData.telefono || "",
-      mail: eventData.mail || "",
-      lugar: eventData.lugar || "",
-      cantidadPersonas: eventData.cantidadPersonas || "",
-      observacion: eventData.observacion || "",
-      redireccion: eventData.redireccion || "",
-      canal: eventData.canal || "",
-      respuestaViaMail: eventData.respuestaViaMail || "",
-      asignacionComercialMail: eventData.asignacionComercialMail || "",
-      horarioInicioEvento: eventData.horarioInicioEvento || "",
-      horarioFinalizacionEvento: eventData.horarioFinalizacionEvento || "",
-      fechaEvento: eventData.fechaEvento || "",   // <-- impacta en P
-      sector: eventData.sector || "",
-      vendedorComercialAsignado: eventData.vendedorComercialAsignado || "",
-      marcaTemporal: eventData.marcaTemporal || "",
-      demora: eventData.demora || "",
-      presupuesto: eventData.presupuesto || "",
-      fechaPresupEnviado: eventData.fechaPresupEnviado || "",
-      estado: eventData.estado || "",
+      // AUDITORÍA: una entrada por cada campo no vacío en la creación
+      const entries: AuditEntry[] = []
+      const keys: (keyof CreateEventSheetDTO)[] = [
+        "fechaCliente","horaCliente","nombre","telefono","mail","lugar",
+        "cantidadPersonas","observacion","redireccion","canal",
+        "respuestaViaMail","asignacionComercialMail","horarioInicioEvento",
+        "horarioFinalizacionEvento","fechaEvento","sector",
+        "vendedorComercialAsignado","marcaTemporal","demora","presupuesto",
+        "fechaPresupEnviado","estado"
+      ]
+      keys.forEach(k => {
+        const v = (eventData as any)[k]
+        if (v != null && String(v).trim() !== "") {
+          entries.push({
+            rowNumber,
+            campo: this.toLabel(String(k)),
+            antes: "",
+            despues: String(v),
+            usuario: opts?.usuario,
+            origen: opts?.origen || "BACK",
+            nota: "Alta de registro",
+          })
+        }
+      })
+      await this.appendAudit(entries)
+
+      // devolvemos sin ID (lo completa tu Apps Script)
+      return {
+        id: "",
+        fechaCliente: eventData.fechaCliente || "",
+        horaCliente: eventData.horaCliente || "",
+        nombre: eventData.nombre || "",
+        telefono: eventData.telefono || "",
+        mail: eventData.mail || "",
+        lugar: eventData.lugar || "",
+        cantidadPersonas: eventData.cantidadPersonas || "",
+        observacion: eventData.observacion || "",
+        redireccion: eventData.redireccion || "",
+        canal: eventData.canal || "",
+        respuestaViaMail: eventData.respuestaViaMail || "",
+        asignacionComercialMail: eventData.asignacionComercialMail || "",
+        horarioInicioEvento: eventData.horarioInicioEvento || "",
+        horarioFinalizacionEvento: eventData.horarioFinalizacionEvento || "",
+        fechaEvento: eventData.fechaEvento || "",
+        sector: eventData.sector || "",
+        vendedorComercialAsignado: eventData.vendedorComercialAsignado || "",
+        marcaTemporal: eventData.marcaTemporal || "",
+        demora: eventData.demora || "",
+        presupuesto: eventData.presupuesto || "",
+        fechaPresupEnviado: eventData.fechaPresupEnviado || "",
+        estado: eventData.estado || "",
+      }
+    } catch (error) {
+      console.error("[v0] Error creating event:", error)
+      throw new Error("Error al crear evento en Google Sheets")
     }
-  } catch (error) {
-    console.error("[v0] Error creating event:", error)
-    throw new Error("Error al crear evento en Google Sheets")
   }
-}
 
-
-  // --- UPDATE EVENT (A..W) + estado (W) + rechazoMotivo (AO) ---
+  // ====== UPDATE ====== (audita cada campo cambiado)
   async updateEvent(
     id: string,
-    eventData: UpdateEventSheetDTO & { rechazoMotivo?: string }
+    eventData: UpdateEventSheetDTO & { rechazoMotivo?: string },
+    opts?: { usuario?: string; origen?: string }
   ): Promise<EventSheet | null> {
     try {
       const rowNumber = await this.findRowNumberById(id)
       if (!rowNumber) return null
 
-      // Leer fila actual (A..AM para tener fechas de observaciones)
+      // Leer fila actual
       const currentResp = await this.sheets.spreadsheets.values.get({
         spreadsheetId: SPREADSHEET_ID,
         range: `${SHEET_NAME}!A${rowNumber}:AM${rowNumber}`,
@@ -233,13 +368,11 @@ async createEvent(eventData: CreateEventSheetDTO): Promise<EventSheet> {
       const currentRow = currentResp.data.values?.[0] ?? []
       const currentEvent = this.rowToEventSheet(currentRow, rowNumber - 2)
 
-      // Separamos el motivo de rechazo (AO)
       const { rechazoMotivo, ...rowData } = (eventData ?? {}) as any
 
-      // Merge SOLO base (A..W)
       const updatedEvent: EventSheet = { ...currentEvent, ...rowData }
 
-      // TIMESTAMPS automáticos
+      // Timestamps automáticos (igual que tenías)
       const wroteAnyHorario =
         Boolean(rowData.horarioInicioEvento) ||
         Boolean(rowData.horarioFinalizacionEvento)
@@ -247,16 +380,11 @@ async createEvent(eventData: CreateEventSheetDTO): Promise<EventSheet> {
       if (wroteAnyHorario && !currentEvent.marcaTemporal) {
         updatedEvent.marcaTemporal = this.nowAR()
       }
-
-      if (
-        typeof rowData.presupuesto === "string" &&
-        rowData.presupuesto.trim() &&
-        !currentEvent.fechaPresupEnviado
-      ) {
+      if (typeof rowData.presupuesto === "string" && rowData.presupuesto.trim() && !currentEvent.fechaPresupEnviado) {
         updatedEvent.fechaPresupEnviado = this.nowAR()
       }
 
-      // ¿Cambió algo real en A..W?
+      // ¿Qué cambió?
       const baseKeys: (keyof EventSheet)[] = [
         "fechaCliente","horaCliente","nombre","telefono","mail","lugar",
         "cantidadPersonas","observacion","redireccion","canal",
@@ -265,38 +393,51 @@ async createEvent(eventData: CreateEventSheetDTO): Promise<EventSheet> {
         "vendedorComercialAsignado","marcaTemporal","demora","presupuesto",
         "fechaPresupEnviado","estado"
       ]
-      const changedBase = baseKeys.some(k => (updatedEvent as any)[k] !== (currentEvent as any)[k])
 
-      // 1) Si cambió algo del bloque base, actualizamos A..W (ID queda igual)
-      if (changedBase) {
-        const updatedRow = this.eventSheetToRow(updatedEvent, id) // A..W
+      const changedMap: Record<string, { antes: string; despues: string }> = {}
+      baseKeys.forEach(k => {
+        const before = (currentEvent as any)[k] ?? ""
+        const after  = (updatedEvent as any)[k] ?? ""
+        if (String(before) !== String(after)) {
+          changedMap[String(k)] = { antes: String(before), despues: String(after) }
+        }
+      })
+
+      // 1) Persistir cambios en la hoja principal (A..W)
+      if (Object.keys(changedMap).length > 0) {
+        const updatedRow = this.eventSheetToRow(updatedEvent, id)
         await this.sheets.spreadsheets.values.update({
           spreadsheetId: SPREADSHEET_ID,
-          range: `${SHEET_NAME}!A${rowNumber}:${COL.ESTADO.letter}${rowNumber}`, // A..W
+          range: `${SHEET_NAME}!A${rowNumber}:${COL.ESTADO.letter}${rowNumber}`,
           valueInputOption: "USER_ENTERED",
           requestBody: { values: [updatedRow] },
         })
       }
 
-      // 2) Si vino 'estado', reforzamos W{fila} (opcional)
-      if (typeof rowData.estado === "string" && rowData.estado.trim() !== "") {
-        await this.sheets.spreadsheets.values.update({
-          spreadsheetId: SPREADSHEET_ID,
-          range: `${SHEET_NAME}!${COL.ESTADO.letter}${rowNumber}`, // W{fila}
-          valueInputOption: "USER_ENTERED",
-          requestBody: { values: [[rowData.estado.trim()]] },
-        })
-      }
-
-      // 3) Si vino 'rechazoMotivo', escribimos AO{fila}
+      // 2) Motivo de rechazo (AO) si vino
       if (typeof rechazoMotivo === "string" && rechazoMotivo.trim() !== "") {
         await this.sheets.spreadsheets.values.update({
           spreadsheetId: SPREADSHEET_ID,
-          range: `${SHEET_NAME}!${COL.RECHAZO_MOTIVO.letter}${rowNumber}`, // AO{fila}
+          range: `${SHEET_NAME}!${COL.RECHAZO_MOTIVO.letter}${rowNumber}`,
           valueInputOption: "USER_ENTERED",
           requestBody: { values: [[rechazoMotivo.trim()]] },
         })
+        changedMap["rechazoMotivo"] = { antes: "", despues: rechazoMotivo.trim() }
         ;(updatedEvent as any).rechazoMotivo = rechazoMotivo.trim()
+      }
+
+      // 3) AUDITORÍA: una fila por campo cambiado
+      if (Object.keys(changedMap).length > 0) {
+        const entries: AuditEntry[] = Object.entries(changedMap).map(([k, v]) => ({
+          id,
+          rowNumber,
+          campo: this.toLabel(k),
+          antes: v.antes,
+          despues: v.despues,
+          usuario: opts?.usuario,
+          origen: opts?.origen || "BACK",
+        }))
+        await this.appendAudit(entries)
       }
 
       return updatedEvent
@@ -307,9 +448,7 @@ async createEvent(eventData: CreateEventSheetDTO): Promise<EventSheet> {
     }
   }
 
-  // --------- Observaciones ---------
-
-  // Devolver observaciones [{texto, fecha}] para un cliente por Id (más reciente arriba)
+  // --------- Observaciones (sin cambios) ---------
   async getObservacionesById(id: string): Promise<ObsItem[]> {
     const rowNumber = await this.findRowNumberById(id)
     if (!rowNumber) return []
@@ -331,7 +470,6 @@ async createEvent(eventData: CreateEventSheetDTO): Promise<EventSheet> {
     return list
   }
 
-  // Agregar observación: escribe en la primera ObservacionN vacía y su FechaObsN correspondiente
   async addObservacion(id: string, texto: string): Promise<{ usedKey: string; usedDateKey: string }> {
     const rowNumber = await this.findRowNumberById(id)
     if (!rowNumber) throw new Error("Id no encontrado en la columna A")
@@ -351,7 +489,6 @@ async createEvent(eventData: CreateEventSheetDTO): Promise<EventSheet> {
     const obsRange = `${SHEET_NAME}!${obsCol.letter}${rowNumber}`
     const fechaRange = `${SHEET_NAME}!${fechaCol.letter}${rowNumber}`
 
-    // Escribir texto y fecha (estática)
     await this.sheets.spreadsheets.values.update({
       spreadsheetId: SPREADSHEET_ID,
       range: obsRange,
