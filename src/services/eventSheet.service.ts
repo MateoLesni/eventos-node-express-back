@@ -83,7 +83,7 @@ export class EventSheetService {
       asignacionComercialMail: row[12] || "",
       horarioInicioEvento: row[13] || "",
       horarioFinalizacionEvento: row[14] || "",
-      fechaEvento: row[15] || "",
+      fechaEvento: row[15] || "", // <-- Columna P
       sector: row[16] || "",
       vendedorComercialAsignado: row[17] || "",
       marcaTemporal: row[18] || "",
@@ -93,7 +93,7 @@ export class EventSheetService {
       estado: row[22] || "",
     }
 
-    // Observacion1..8 + FechaObs1..8 → mostramos más recientes arriba
+    // Observacion1..8 + FechaObs1..8 → más recientes arriba
     const observacionesList: ObsItem[] = OBS_COLUMNS.map((c, i) => {
       const texto = (row[c.index] ?? "").toString().trim()
       const fecha = (row[FECHA_COLUMNS[i].index] ?? "").toString().trim()
@@ -108,7 +108,7 @@ export class EventSheetService {
   // Convertir objeto EventSheet a fila de Google Sheets (A..W)
   private eventSheetToRow(event: CreateEventSheetDTO | UpdateEventSheetDTO, id?: string): any[] {
     return [
-      id || "", // Id (columna A)
+      id || "", // Id (columna A) — en creación se pasa "" para que quede vacía
       event.fechaCliente || "",
       event.horaCliente || "",
       event.nombre || "",
@@ -123,7 +123,7 @@ export class EventSheetService {
       event.asignacionComercialMail || "",
       event.horarioInicioEvento || "",
       event.horarioFinalizacionEvento || "",
-      event.fechaEvento || "",
+      event.fechaEvento || "", // <-- P
       event.sector || "",
       event.vendedorComercialAsignado || "",
       event.marcaTemporal || "",
@@ -169,28 +169,31 @@ export class EventSheetService {
     }
   }
 
+  // ====== CREATE ====== (NO escribir ID: A queda vacía)
   async createEvent(eventData: CreateEventSheetDTO): Promise<EventSheet> {
     try {
-      const allEvents = await this.getAllEvents()
-      const newId = String(allEvents.length + 1)
-      const newRow = this.eventSheetToRow(eventData, newId)
+      // Construimos la fila con A = "" para NO tocar la columna A
+      const newRow = this.eventSheetToRow(eventData, "")
 
+      // Append empezando en B:AM para ignorar A (ID)
       await this.sheets.spreadsheets.values.append({
         spreadsheetId: SPREADSHEET_ID,
-        range: `${SHEET_NAME}!A:AM`,
+        range: `${SHEET_NAME}!B:AM`,
         valueInputOption: "USER_ENTERED",
-        requestBody: { values: [newRow] },
+        insertDataOption: "INSERT_ROWS",
+        requestBody: { values: [newRow.slice(1)] }, // desde B
       })
 
+      // Devolvemos sin ID (tu Apps Script lo llenará)
       return {
-        id: newId,
-        fechaCliente: eventData.fechaCliente,
-        horaCliente: eventData.horaCliente,
-        nombre: eventData.nombre,
-        telefono: eventData.telefono,
-        mail: eventData.mail,
-        lugar: eventData.lugar,
-        cantidadPersonas: eventData.cantidadPersonas,
+        id: "", // queda vacío aquí
+        fechaCliente: eventData.fechaCliente || "",
+        horaCliente: eventData.horaCliente || "",
+        nombre: eventData.nombre || "",
+        telefono: eventData.telefono || "",
+        mail: eventData.mail || "",
+        lugar: eventData.lugar || "",
+        cantidadPersonas: eventData.cantidadPersonas || "",
         observacion: eventData.observacion || "",
         redireccion: eventData.redireccion || "",
         canal: eventData.canal || "",
@@ -198,7 +201,7 @@ export class EventSheetService {
         asignacionComercialMail: eventData.asignacionComercialMail || "",
         horarioInicioEvento: eventData.horarioInicioEvento || "",
         horarioFinalizacionEvento: eventData.horarioFinalizacionEvento || "",
-        fechaEvento: eventData.fechaEvento || "",
+        fechaEvento: eventData.fechaEvento || "", // <-- impacta en P
         sector: eventData.sector || "",
         vendedorComercialAsignado: eventData.vendedorComercialAsignado || "",
         marcaTemporal: eventData.marcaTemporal || "",
@@ -264,7 +267,7 @@ export class EventSheetService {
       ]
       const changedBase = baseKeys.some(k => (updatedEvent as any)[k] !== (currentEvent as any)[k])
 
-      // 1) Si cambió algo del bloque base, actualizamos A..W
+      // 1) Si cambió algo del bloque base, actualizamos A..W (ID queda igual)
       if (changedBase) {
         const updatedRow = this.eventSheetToRow(updatedEvent, id) // A..W
         await this.sheets.spreadsheets.values.update({
@@ -275,7 +278,7 @@ export class EventSheetService {
         })
       }
 
-      // 2) Si vino 'estado', reforzamos W{fila} (opcional pero seguro)
+      // 2) Si vino 'estado', reforzamos W{fila} (opcional)
       if (typeof rowData.estado === "string" && rowData.estado.trim() !== "") {
         await this.sheets.spreadsheets.values.update({
           spreadsheetId: SPREADSHEET_ID,
@@ -348,7 +351,7 @@ export class EventSheetService {
     const obsRange = `${SHEET_NAME}!${obsCol.letter}${rowNumber}`
     const fechaRange = `${SHEET_NAME}!${fechaCol.letter}${rowNumber}`
 
-    // Escribir texto y fecha (estática) — dos updates simples
+    // Escribir texto y fecha (estática)
     await this.sheets.spreadsheets.values.update({
       spreadsheetId: SPREADSHEET_ID,
       range: obsRange,
