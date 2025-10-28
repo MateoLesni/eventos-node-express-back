@@ -79,6 +79,54 @@ type AuditEntry = {
 export class EventSheetService {
   private sheets = getGoogleSheetsClient()
 
+
+  // ADD inside EventSheetService class
+public async getAuditById(id: string): Promise<Array<{
+  fecha: string;
+  id: string;
+  rowNumber: string;
+  campo: string;
+  antes: string;
+  despues: string;
+  usuario: string;
+  origen: string;
+  nota: string;
+}>> {
+  await this.ensureAuditSheetExists();
+
+  const resp = await this.sheets.spreadsheets.values.get({
+    spreadsheetId: SPREADSHEET_ID,
+    range: `${AUDIT_SHEET_NAME}!A2:I`, // Fecha, ID, Fila, Campo, Antes, Después, Usuario, Origen, Nota
+  });
+
+  const rows = resp.data.values ?? [];
+  const target = String(id).trim();
+
+  const items = rows
+    .filter((r) => (r?.[1] ?? "").toString().trim() === target) // columna B = ID Cliente
+    .map((r) => ({
+      fecha: (r?.[0] ?? "").toString(),        // A
+      id: (r?.[1] ?? "").toString(),           // B
+      rowNumber: (r?.[2] ?? "").toString(),    // C
+      campo: (r?.[3] ?? "").toString(),        // D
+      antes: (r?.[4] ?? "").toString(),        // E
+      despues: (r?.[5] ?? "").toString(),      // F
+      usuario: (r?.[6] ?? "").toString(),      // G
+      origen: (r?.[7] ?? "").toString(),       // H
+      nota: (r?.[8] ?? "").toString(),         // I
+    }));
+
+  // Opcional: devolver ordenado por fecha descendente si se puede parsear
+  items.sort((a, b) => {
+    const ta = Date.parse(a.fecha || "") || 0;
+    const tb = Date.parse(b.fecha || "") || 0;
+    return tb - ta;
+  });
+
+  return items;
+}
+
+
   // ---------- util ----------
   // 🔧 Reemplazá COMPLETO este método en EventSheetService
   private async ensureAuditSheetExists(): Promise<void> {

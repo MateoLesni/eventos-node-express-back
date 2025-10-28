@@ -1,9 +1,30 @@
 import type { Request, Response } from "express"
 import { EventSheetService } from "../services/eventSheet.service"
+// ADD import (arriba con el resto)
+
+// ADD this controller function
+export const getAuditById = async (req: any, res: any) => {
+  try {
+    const { id } = req.params;
+    if (!id) return res.status(400).json({ message: "ID requerido" });
+
+    const service = new EventSheetService();
+    const data = await service.getAuditById(id);
+
+    return res.json({ data });
+  } catch (error: any) {
+    const msg = error?.message || "Error al obtener histórico de auditoría";
+    console.error("[controller] getAuditById error:", error);
+    return res.status(500).json({ message: msg });
+  }
+};
+
 
 const eventSheetService = new EventSheetService()
 
+
 export class EventSheetController {
+  
   // 🔹 Obtener todos los eventos (incluye observacionesList)
   async getAllEvents(req: Request, res: Response) {
     try {

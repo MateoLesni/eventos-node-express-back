@@ -36,7 +36,7 @@ npm install
 npm run dev
 \`\`\`
 
-El servidor estará disponible en `http://localhost:3000`
+El servidor estará disponible en `http://localhost:3001`
 
 ## 🏗️ Build
 

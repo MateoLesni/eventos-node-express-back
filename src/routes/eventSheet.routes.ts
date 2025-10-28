@@ -1,11 +1,13 @@
 import { Router } from "express"
-import { EventSheetController } from "../controllers/eventSheet.controller"
+import { EventSheetController, getAuditById} from "../controllers/eventSheet.controller"
 
 const router = Router()
 const eventSheetController = new EventSheetController()
 
 // GET /api/eventSheet - Obtener todos los eventos
 router.get("/", eventSheetController.getAllEvents)
+
+router.get("/:id/audit", getAuditById);
 
 // ⚠️ IMPORTANTE: poner estas rutas ANTES de "/:id"
 //
