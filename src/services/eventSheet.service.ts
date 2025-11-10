@@ -79,53 +79,63 @@ type AuditEntry = {
 export class EventSheetService {
   private sheets = getGoogleSheetsClient()
 
+  // ---------- util interno para escritura sin tocar L/M ----------
+  // eventSheetToRow sigue creando la fila completa (A..V),
+  // pero al escribir partimos en A..K y N..V para nunca pisar L ni M.
+  private splitRowForWrite(fullRow: any[]) {
+    // A..K = indices 0..10  (11 celdas)
+    // L,M  = indices 11,12  (SKIP)
+    // N..V = indices 13..21 (9 celdas)
+    const left = fullRow.slice(0, 11)   // A..K
+    const right = fullRow.slice(13, 22) // N..V
+    return { left, right }
+  }
 
   // ADD inside EventSheetService class
-public async getAuditById(id: string): Promise<Array<{
-  fecha: string;
-  id: string;
-  rowNumber: string;
-  campo: string;
-  antes: string;
-  despues: string;
-  usuario: string;
-  origen: string;
-  nota: string;
-}>> {
-  await this.ensureAuditSheetExists();
+  public async getAuditById(id: string): Promise<Array<{
+    fecha: string;
+    id: string;
+    rowNumber: string;
+    campo: string;
+    antes: string;
+    despues: string;
+    usuario: string;
+    origen: string;
+    nota: string;
+  }>> {
+    await this.ensureAuditSheetExists();
 
-  const resp = await this.sheets.spreadsheets.values.get({
-    spreadsheetId: SPREADSHEET_ID,
-    range: `${AUDIT_SHEET_NAME}!A2:I`, // Fecha, ID, Fila, Campo, Antes, Después, Usuario, Origen, Nota
-  });
+    const resp = await this.sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${AUDIT_SHEET_NAME}!A2:I`, // Fecha, ID, Fila, Campo, Antes, Después, Usuario, Origen, Nota
+    });
 
-  const rows = resp.data.values ?? [];
-  const target = String(id).trim();
+    const rows = resp.data.values ?? [];
+    const target = String(id).trim();
 
-  const items = rows
-    .filter((r) => (r?.[1] ?? "").toString().trim() === target) // columna B = ID Cliente
-    .map((r) => ({
-      fecha: (r?.[0] ?? "").toString(),        // A
-      id: (r?.[1] ?? "").toString(),           // B
-      rowNumber: (r?.[2] ?? "").toString(),    // C
-      campo: (r?.[3] ?? "").toString(),        // D
-      antes: (r?.[4] ?? "").toString(),        // E
-      despues: (r?.[5] ?? "").toString(),      // F
-      usuario: (r?.[6] ?? "").toString(),      // G
-      origen: (r?.[7] ?? "").toString(),       // H
-      nota: (r?.[8] ?? "").toString(),         // I
-    }));
+    const items = rows
+      .filter((r) => (r?.[1] ?? "").toString().trim() === target) // columna B = ID Cliente
+      .map((r) => ({
+        fecha: (r?.[0] ?? "").toString(),        // A
+        id: (r?.[1] ?? "").toString(),           // B
+        rowNumber: (r?.[2] ?? "").toString(),    // C
+        campo: (r?.[3] ?? "").toString(),        // D
+        antes: (r?.[4] ?? "").toString(),        // E
+        despues: (r?.[5] ?? "").toString(),      // F
+        usuario: (r?.[6] ?? "").toString(),      // G
+        origen: (r?.[7] ?? "").toString(),       // H
+        nota: (r?.[8] ?? "").toString(),         // I
+      }));
 
-  // Opcional: devolver ordenado por fecha descendente si se puede parsear
-  items.sort((a, b) => {
-    const ta = Date.parse(a.fecha || "") || 0;
-    const tb = Date.parse(b.fecha || "") || 0;
-    return tb - ta;
-  });
+    // Opcional: devolver ordenado por fecha descendente si se puede parsear
+    items.sort((a, b) => {
+      const ta = Date.parse(a.fecha || "") || 0;
+      const tb = Date.parse(b.fecha || "") || 0;
+      return tb - ta;
+    });
 
-  return items;
-}
-
+    return items;
+  }
 
   // ---------- util ----------
   // 🔧 Reemplazá COMPLETO este método en EventSheetService
@@ -258,7 +268,7 @@ public async getAuditById(id: string): Promise<Array<{
     return { ...base, observacionesList }
   }
 
-  // ⚠️ NO escribir W (estado). Solo hasta V.
+  // ⚠️ NO escribir W (estado). Solo hasta V. (Y además NO L/M)
   private eventSheetToRow(event: CreateEventSheetDTO | UpdateEventSheetDTO, id?: string): any[] {
     return [
       id || "", // A
@@ -272,8 +282,8 @@ public async getAuditById(id: string): Promise<Array<{
       event.observacion || "",
       event.redireccion || "",
       event.canal || "",
-      event.respuestaViaMail || "",
-      event.asignacionComercialMail || "",
+      event.respuestaViaMail || "",        // L (NO se escribirá)
+      event.asignacionComercialMail || "", // M (NO se escribirá)
       event.horarioInicioEvento || "",
       event.horarioFinalizacionEvento || "",
       event.fechaEvento || "", // P
@@ -321,26 +331,39 @@ public async getAuditById(id: string): Promise<Array<{
     }
   }
 
-  // ====== CREATE ====== (A queda vacía; audita cada campo seteado) — NO escribir estado
+  // ====== CREATE ====== (A queda vacía; audita cada campo seteado) — NO escribir estado — NI L/M
   async createEvent(
     eventData: CreateEventSheetDTO,
     opts?: { usuario?: string; origen?: string } // opcional
   ): Promise<EventSheet> {
     try {
-      // construir fila con A = "" (ID vacío)
-      const newRow = this.eventSheetToRow(eventData, "")
-      const resp = await this.sheets.spreadsheets.values.append({
+      // construir fila completa (A..V), pero escribiremos solo A..K y N..V
+      const fullRow = this.eventSheetToRow(eventData, "")
+      const { left, right } = this.splitRowForWrite(fullRow)
+
+      // 1) append SOLO A..K (nunca pisa L/M)
+      const appendResp = await this.sheets.spreadsheets.values.append({
         spreadsheetId: SPREADSHEET_ID,
-        range: `${SHEET_NAME}!A:V`, // ← solo hasta V
+        range: `${SHEET_NAME}!A:K`, // ← sólo hasta K
         valueInputOption: "USER_ENTERED",
         insertDataOption: "INSERT_ROWS",
-        requestBody: { values: [newRow] },
+        requestBody: { values: [left] },
       })
 
-      // obtener número de fila insertada
-      const rowNumber = this.parseRowFromUpdatedRange(resp.data.updates?.updatedRange)
+      // número de fila insertada
+      const rowNumber = this.parseRowFromUpdatedRange(appendResp.data.updates?.updatedRange)
 
-      // AUDITORÍA: una entrada por cada campo no vacío en la creación (sin estado)
+      // 2) update N..V en la MISMA fila
+      if (rowNumber) {
+        await this.sheets.spreadsheets.values.update({
+          spreadsheetId: SPREADSHEET_ID,
+          range: `${SHEET_NAME}!N${rowNumber}:V${rowNumber}`, // N..V
+          valueInputOption: "USER_ENTERED",
+          requestBody: { values: [right] },
+        })
+      }
+
+      // AUDITORÍA: igual que antes (incluye los campos, aunque L/M no se escriban)
       const entries: AuditEntry[] = []
       const keys: (keyof CreateEventSheetDTO)[] = [
         "fechaCliente","horaCliente","nombre","telefono","mail","lugar",
@@ -398,7 +421,7 @@ public async getAuditById(id: string): Promise<Array<{
     }
   }
 
-  // ====== UPDATE ====== (audita cada campo cambiado) — NO escribir estado
+  // ====== UPDATE ====== (audita cada campo cambiado) — NO escribir estado — NI L/M
   async updateEvent(
     id: string,
     eventData: UpdateEventSheetDTO & { rechazoMotivo?: string },
@@ -451,15 +474,33 @@ public async getAuditById(id: string): Promise<Array<{
         }
       })
 
-      // 1) Persistir cambios en la hoja principal (A..V) — NO tocar W
-      if (Object.keys(changedMap).length > 0) {
-        const updatedRow = this.eventSheetToRow(updatedEvent, id)
-        await this.sheets.spreadsheets.values.update({
-          spreadsheetId: SPREADSHEET_ID,
-          range: `${SHEET_NAME}!A${rowNumber}:V${rowNumber}`, // ← hasta V
-          valueInputOption: "USER_ENTERED",
-          requestBody: { values: [updatedRow] },
-        })
+      // 1) Persistir cambios en la hoja principal en DOS rangos: A..K y N..V (NO tocar L/M)
+      const hasAnyChange = Object.keys(changedMap).length > 0
+      if (hasAnyChange) {
+        const fullRow = this.eventSheetToRow(updatedEvent, id)
+        const { left, right } = this.splitRowForWrite(fullRow)
+
+        // Determinar si hubo algún cambio que afecte columnas fuera de L/M
+        // (para evitar escribir si lo único que cambió fue L o M)
+        const nonWritable = new Set(["respuestaViaMail", "asignacionComercialMail"])
+        const hasWritableChange = Object.keys(changedMap).some(k => !nonWritable.has(k))
+
+        if (hasWritableChange) {
+          // A..K
+          await this.sheets.spreadsheets.values.update({
+            spreadsheetId: SPREADSHEET_ID,
+            range: `${SHEET_NAME}!A${rowNumber}:K${rowNumber}`,
+            valueInputOption: "USER_ENTERED",
+            requestBody: { values: [left] },
+          })
+          // N..V
+          await this.sheets.spreadsheets.values.update({
+            spreadsheetId: SPREADSHEET_ID,
+            range: `${SHEET_NAME}!N${rowNumber}:V${rowNumber}`,
+            valueInputOption: "USER_ENTERED",
+            requestBody: { values: [right] },
+          })
+        }
       }
 
       // 2) Motivo de rechazo (AO) si vino
@@ -474,7 +515,7 @@ public async getAuditById(id: string): Promise<Array<{
         ;(updatedEvent as any).rechazoMotivo = rechazoMotivo.trim()
       }
 
-      // 3) AUDITORÍA: una fila por campo cambiado
+      // 3) AUDITORÍA: una fila por campo cambiado (sin alterar tu lógica previa)
       if (Object.keys(changedMap).length > 0) {
         const entries: AuditEntry[] = Object.entries(changedMap).map(([k, v]) => ({
           id,
