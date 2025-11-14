@@ -30,6 +30,7 @@ const FECHA_COLUMNS = [
 const COL = {
   ESTADO: { letter: "W", index: 22 },          // W (NO escribir)
   RECHAZO_MOTIVO: { letter: "AO", index: 40 }, // AO
+  // AP = 41 → ComercialFinal (solo lectura, fórmula en Sheets)
 }
 
 // === Auditoría ===
@@ -62,6 +63,7 @@ const LABELS: Record<string, string> = {
   fechaPresupEnviado: "Fecha Presup Enviado",
   // estado: "Estado", // ← No auditamos escritura de estado (lo calcula la fórmula)
   rechazoMotivo: "Motivo Rechazo",
+  ComercialFinal: "Comercial Final",
 }
 
 type ObsItem = { texto: string; fecha: string }
@@ -91,7 +93,7 @@ export class EventSheetService {
     return { left, right }
   }
 
-  // ADD inside EventSheetService class
+  // ---------- Auditoría: obtener por ID ----------
   public async getAuditById(id: string): Promise<Array<{
     fecha: string;
     id: string;
@@ -103,15 +105,15 @@ export class EventSheetService {
     origen: string;
     nota: string;
   }>> {
-    await this.ensureAuditSheetExists();
+    await this.ensureAuditSheetExists()
 
     const resp = await this.sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
       range: `${AUDIT_SHEET_NAME}!A2:I`, // Fecha, ID, Fila, Campo, Antes, Después, Usuario, Origen, Nota
-    });
+    })
 
-    const rows = resp.data.values ?? [];
-    const target = String(id).trim();
+    const rows = resp.data.values ?? []
+    const target = String(id).trim()
 
     const items = rows
       .filter((r) => (r?.[1] ?? "").toString().trim() === target) // columna B = ID Cliente
@@ -125,16 +127,16 @@ export class EventSheetService {
         usuario: (r?.[6] ?? "").toString(),      // G
         origen: (r?.[7] ?? "").toString(),       // H
         nota: (r?.[8] ?? "").toString(),         // I
-      }));
+      }))
 
     // Opcional: devolver ordenado por fecha descendente si se puede parsear
     items.sort((a, b) => {
-      const ta = Date.parse(a.fecha || "") || 0;
-      const tb = Date.parse(b.fecha || "") || 0;
-      return tb - ta;
-    });
+      const ta = Date.parse(a.fecha || "") || 0
+      const tb = Date.parse(b.fecha || "") || 0
+      return tb - ta
+    })
 
-    return items;
+    return items
   }
 
   // ---------- util ----------
@@ -230,8 +232,14 @@ export class EventSheetService {
     return idx + 2
   }
 
-  private rowToEventSheet(row: any[], _rowIndex: number): EventSheet & { observacionesList: ObsItem[] } {
-    const base: EventSheet = {
+  private rowToEventSheet(
+    row: any[],
+    _rowIndex: number,
+  ): EventSheet & { observacionesList: ObsItem[]; comercialFinal?: string } {
+    // AP = 41
+    const comercialFinalCell = row[41] || ""
+
+    const base: EventSheet & { comercialFinal?: string } = {
       id: String(row[0] || ""),
       fechaCliente: row[1] || "",
       horaCliente: row[2] || "",
@@ -254,8 +262,12 @@ export class EventSheetService {
       demora: row[19] || "",
       presupuesto: row[20] || "",
       fechaPresupEnviado: row[21] || "",
-      estado: row[22] || "", // solo lectura (lo calcula la fórmula)
-    }
+      estado: row[22] || "",          // solo lectura (lo calcula la fórmula)
+      ComercialFinal: comercialFinalCell, // AP = 41 → ComercialFinal (solo lectura)
+    } as any
+
+    // Alias camelCase para el front
+    ;(base as any).comercialFinal = comercialFinalCell
 
     const observacionesList: ObsItem[] = OBS_COLUMNS.map((c, i) => {
       const texto = (row[c.index] ?? "").toString().trim()
@@ -294,14 +306,15 @@ export class EventSheetService {
       event.presupuesto || "",
       event.fechaPresupEnviado || "", // V
       // ← NO incluir estado (W)
+      // AP (ComercialFinal) queda 100% manejado por fórmula en Sheets
     ]
   }
 
-  async getAllEvents(): Promise<(EventSheet & { observacionesList: ObsItem[] })[]> {
+  async getAllEvents(): Promise<(EventSheet & { observacionesList: ObsItem[]; comercialFinal?: string })[]> {
     try {
       const response = await this.sheets.spreadsheets.values.get({
         spreadsheetId: SPREADSHEET_ID,
-        range: `${SHEET_NAME}!A2:AP`,
+        range: `${SHEET_NAME}!A2:AP`, // incluye AP (ComercialFinal)
       })
       const rows = response.data.values || []
       return rows.map((row, index) => this.rowToEventSheet(row, index))
@@ -311,14 +324,14 @@ export class EventSheetService {
     }
   }
 
-  async getEventById(id: string): Promise<(EventSheet & { observacionesList: ObsItem[] }) | null> {
+  async getEventById(id: string): Promise<(EventSheet & { observacionesList: ObsItem[]; comercialFinal?: string }) | null> {
     try {
       const rowNumber = await this.findRowNumberById(id)
       if (!rowNumber) return null
 
       const response = await this.sheets.spreadsheets.values.get({
         spreadsheetId: SPREADSHEET_ID,
-        range: `${SHEET_NAME}!A${rowNumber}:AM${rowNumber}`,
+        range: `${SHEET_NAME}!A${rowNumber}:AP${rowNumber}`, // hasta AP para leer ComercialFinal
       })
 
       const rows = response.data.values || []
@@ -390,7 +403,7 @@ export class EventSheetService {
       await this.appendAudit(entries)
 
       // devolvemos sin ID (lo completa tu Apps Script)
-      return {
+      const result: any = {
         id: "",
         fechaCliente: eventData.fechaCliente || "",
         horaCliente: eventData.horaCliente || "",
@@ -413,8 +426,14 @@ export class EventSheetService {
         demora: eventData.demora || "",
         presupuesto: eventData.presupuesto || "",
         fechaPresupEnviado: eventData.fechaPresupEnviado || "",
-        estado: "", // lo calculará la fórmula
+        estado: "",          // lo calculará la fórmula
+        ComercialFinal: "",  // lo calcula la fórmula en AP (se verá en el próximo GET)
       }
+
+      // alias camelCase para el front
+      result.comercialFinal = ""
+
+      return result as EventSheet
     } catch (error) {
       console.error("[v0] Error creating event:", error)
       throw new Error("Error al crear evento en Google Sheets")
@@ -431,17 +450,17 @@ export class EventSheetService {
       const rowNumber = await this.findRowNumberById(id)
       if (!rowNumber) return null
 
-      // Leer fila actual
+      // Leer fila actual (incluyendo AP para ComercialFinal)
       const currentResp = await this.sheets.spreadsheets.values.get({
         spreadsheetId: SPREADSHEET_ID,
-        range: `${SHEET_NAME}!A${rowNumber}:AM${rowNumber}`,
+        range: `${SHEET_NAME}!A${rowNumber}:AP${rowNumber}`,
       })
       const currentRow = currentResp.data.values?.[0] ?? []
       const currentEvent = this.rowToEventSheet(currentRow, rowNumber - 2)
 
       const { rechazoMotivo, ...rowData } = (eventData ?? {}) as any
 
-      const updatedEvent: EventSheet = { ...currentEvent, ...rowData }
+      const updatedEvent: any = { ...currentEvent, ...rowData }
 
       // Timestamps automáticos
       const wroteAnyHorario =
@@ -455,14 +474,14 @@ export class EventSheetService {
         updatedEvent.fechaPresupEnviado = this.nowAR()
       }
 
-      // ¿Qué cambió? (sin estado)
+      // ¿Qué cambió? (sin estado ni ComercialFinal, que es fórmula)
       const baseKeys: (keyof EventSheet)[] = [
         "fechaCliente","horaCliente","nombre","telefono","mail","lugar",
         "cantidadPersonas","observacion","redireccion","canal",
         "respuestaViaMail","asignacionComercialMail","horarioInicioEvento",
         "horarioFinalizacionEvento","fechaEvento","sector",
         "vendedorComercialAsignado","marcaTemporal","demora","presupuesto",
-        "fechaPresupEnviado" // ← sin estado
+        "fechaPresupEnviado" // ← sin estado ni ComercialFinal
       ]
 
       const changedMap: Record<string, { antes: string; despues: string }> = {}
@@ -474,7 +493,7 @@ export class EventSheetService {
         }
       })
 
-      // 1) Persistir cambios en la hoja principal en DOS rangos: A..K y N..V (NO tocar L/M)
+      // 1) Persistir cambios en la hoja principal en DOS rangos: A..K y N..V (NO tocar L/M ni AP)
       const hasAnyChange = Object.keys(changedMap).length > 0
       if (hasAnyChange) {
         const fullRow = this.eventSheetToRow(updatedEvent, id)
@@ -512,7 +531,7 @@ export class EventSheetService {
           requestBody: { values: [[rechazoMotivo.trim()]] },
         })
         changedMap["rechazoMotivo"] = { antes: "", despues: rechazoMotivo.trim() }
-        ;(updatedEvent as any).rechazoMotivo = rechazoMotivo.trim()
+        updatedEvent.rechazoMotivo = rechazoMotivo.trim()
       }
 
       // 3) AUDITORÍA: una fila por campo cambiado (sin alterar tu lógica previa)
@@ -529,7 +548,12 @@ export class EventSheetService {
         await this.appendAudit(entries)
       }
 
-      return updatedEvent
+      // Alias camelCase por si se recalculó AP y viene en el próximo GET
+      if (typeof (updatedEvent as any).ComercialFinal === "string") {
+        (updatedEvent as any).comercialFinal = (updatedEvent as any).ComercialFinal
+      }
+
+      return updatedEvent as EventSheet
     } catch (error: any) {
       const gErr = error?.response?.data || error?.message || error
       console.error("[v0] Error updating event (details):", gErr)
@@ -537,14 +561,14 @@ export class EventSheetService {
     }
   }
 
-  // --------- Observaciones (sin cambios) ---------
+  // --------- Observaciones (sin cambios lógicos) ---------
   async getObservacionesById(id: string): Promise<ObsItem[]> {
     const rowNumber = await this.findRowNumberById(id)
     if (!rowNumber) return []
 
     const response = await this.sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: `${SHEET_NAME}!A${rowNumber}:AM${rowNumber}`,
+      range: `${SHEET_NAME}!A${rowNumber}:AP${rowNumber}`, // extiendo a AP por consistencia
     })
     const row = response.data.values?.[0] ?? []
 
@@ -565,7 +589,7 @@ export class EventSheetService {
 
     const getResp = await this.sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: `${SHEET_NAME}!A${rowNumber}:AM${rowNumber}`,
+      range: `${SHEET_NAME}!A${rowNumber}:AP${rowNumber}`, // también hasta AP
     })
     const row = getResp.data.values?.[0] ?? []
 

@@ -22,6 +22,7 @@ export interface EventSheet {
   presupuesto: string
   fechaPresupEnviado: string
   estado: string
+  ComercialFinal: string
 }
 
 export interface CreateEventSheetDTO {
