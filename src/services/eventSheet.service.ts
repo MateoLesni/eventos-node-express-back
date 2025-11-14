@@ -30,7 +30,7 @@ const FECHA_COLUMNS = [
 const COL = {
   ESTADO: { letter: "W", index: 22 },          // W (NO escribir)
   RECHAZO_MOTIVO: { letter: "AO", index: 40 }, // AO
-  // AP = 41 → ComercialFinal (solo lectura, fórmula en Sheets)
+  // AN = 39 → ComercialFinal (solo lectura, fórmula en Sheets)
 }
 
 // === Auditoría ===
@@ -236,8 +236,8 @@ export class EventSheetService {
     row: any[],
     _rowIndex: number,
   ): EventSheet & { observacionesList: ObsItem[]; comercialFinal?: string } {
-    // AP = 41
-    const comercialFinalCell = row[41] || ""
+    // AN = 39 → ComercialFinal
+    const comercialFinalCell = row[39] || ""
 
     const base: EventSheet & { comercialFinal?: string } = {
       id: String(row[0] || ""),
@@ -262,8 +262,8 @@ export class EventSheetService {
       demora: row[19] || "",
       presupuesto: row[20] || "",
       fechaPresupEnviado: row[21] || "",
-      estado: row[22] || "",          // solo lectura (lo calcula la fórmula)
-      ComercialFinal: comercialFinalCell, // AP = 41 → ComercialFinal (solo lectura)
+      estado: row[22] || "",                 // solo lectura (lo calcula la fórmula)
+      ComercialFinal: comercialFinalCell,    // AN = 39 → ComercialFinal (solo lectura)
     } as any
 
     // Alias camelCase para el front
@@ -306,7 +306,7 @@ export class EventSheetService {
       event.presupuesto || "",
       event.fechaPresupEnviado || "", // V
       // ← NO incluir estado (W)
-      // AP (ComercialFinal) queda 100% manejado por fórmula en Sheets
+      // AN (ComercialFinal) queda 100% manejado por fórmula en Sheets
     ]
   }
 
@@ -314,7 +314,7 @@ export class EventSheetService {
     try {
       const response = await this.sheets.spreadsheets.values.get({
         spreadsheetId: SPREADSHEET_ID,
-        range: `${SHEET_NAME}!A2:AP`, // incluye AP (ComercialFinal)
+        range: `${SHEET_NAME}!A2:AP`, // incluye hasta AP (y dentro está AN con ComercialFinal)
       })
       const rows = response.data.values || []
       return rows.map((row, index) => this.rowToEventSheet(row, index))
@@ -331,7 +331,7 @@ export class EventSheetService {
 
       const response = await this.sheets.spreadsheets.values.get({
         spreadsheetId: SPREADSHEET_ID,
-        range: `${SHEET_NAME}!A${rowNumber}:AP${rowNumber}`, // hasta AP para leer ComercialFinal
+        range: `${SHEET_NAME}!A${rowNumber}:AP${rowNumber}`, // hasta AP (AN incluido)
       })
 
       const rows = response.data.values || []
@@ -427,7 +427,7 @@ export class EventSheetService {
         presupuesto: eventData.presupuesto || "",
         fechaPresupEnviado: eventData.fechaPresupEnviado || "",
         estado: "",          // lo calculará la fórmula
-        ComercialFinal: "",  // lo calcula la fórmula en AP (se verá en el próximo GET)
+        ComercialFinal: "",  // lo calcula la fórmula en AN (se verá en el próximo GET)
       }
 
       // alias camelCase para el front
@@ -450,7 +450,7 @@ export class EventSheetService {
       const rowNumber = await this.findRowNumberById(id)
       if (!rowNumber) return null
 
-      // Leer fila actual (incluyendo AP para ComercialFinal)
+      // Leer fila actual (incluyendo AN para ComercialFinal)
       const currentResp = await this.sheets.spreadsheets.values.get({
         spreadsheetId: SPREADSHEET_ID,
         range: `${SHEET_NAME}!A${rowNumber}:AP${rowNumber}`,
@@ -493,7 +493,7 @@ export class EventSheetService {
         }
       })
 
-      // 1) Persistir cambios en la hoja principal en DOS rangos: A..K y N..V (NO tocar L/M ni AP)
+      // 1) Persistir cambios en la hoja principal en DOS rangos: A..K y N..V (NO tocar L/M ni AN)
       const hasAnyChange = Object.keys(changedMap).length > 0
       if (hasAnyChange) {
         const fullRow = this.eventSheetToRow(updatedEvent, id)
@@ -548,7 +548,7 @@ export class EventSheetService {
         await this.appendAudit(entries)
       }
 
-      // Alias camelCase por si se recalculó AP y viene en el próximo GET
+      // Alias camelCase por si se recalculó AN y viene en el próximo GET
       if (typeof (updatedEvent as any).ComercialFinal === "string") {
         (updatedEvent as any).comercialFinal = (updatedEvent as any).ComercialFinal
       }
@@ -568,7 +568,7 @@ export class EventSheetService {
 
     const response = await this.sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: `${SHEET_NAME}!A${rowNumber}:AP${rowNumber}`, // extiendo a AP por consistencia
+      range: `${SHEET_NAME}!A${rowNumber}:AP${rowNumber}`, // extiendo a AP por consistencia (AN incluido)
     })
     const row = response.data.values?.[0] ?? []
 
