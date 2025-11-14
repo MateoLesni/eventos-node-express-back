@@ -301,7 +301,7 @@ export class EventSheetService {
     try {
       const response = await this.sheets.spreadsheets.values.get({
         spreadsheetId: SPREADSHEET_ID,
-        range: `${SHEET_NAME}!A2:AM`,
+        range: `${SHEET_NAME}!A2:AP`,
       })
       const rows = response.data.values || []
       return rows.map((row, index) => this.rowToEventSheet(row, index))
