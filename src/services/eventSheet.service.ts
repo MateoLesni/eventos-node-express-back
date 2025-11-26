@@ -29,8 +29,9 @@ const FECHA_COLUMNS = [
 // Columnas puntuales en hoja principal
 const COL = {
   ESTADO: { letter: "W", index: 22 },          // W (NO escribir)
-  RECHAZO_MOTIVO: { letter: "AO", index: 40 }, // AO
+  RECHAZO_MOTIVO: { letter: "AP", index: 41 }, // AP (RechazoMotivo y Aprobado)
   // AN = 39 → ComercialFinal (solo lectura, fórmula en Sheets)
+  // AO = 40 → (columna anterior de rechazoMotivo, ahora libre)
 }
 
 // === Auditoría ===
